@@ -3,3 +3,7 @@ __pycache__
 episodes/
 .vscode/
 replays/
+logs/
+kits/rl/logs
+replay.html
+kits/rl/replay.html
