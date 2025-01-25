@@ -15,7 +15,7 @@ class Agent():
         env_cfg = EnvParams(**env_cfg)
         self.transformer = ObservationTransformer(player, env_cfg)
         self.env_cfg = env_cfg
-        self.model = PPO.load("logs/exp_1/models/latest_model.zip")
+        self.model = PPO.load("logs/exp_2/models/latest_model.zip")
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):

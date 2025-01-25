@@ -1,7 +1,7 @@
-import gym
+import gymnasium as gym
 import numpy as np
 import numpy.typing as npt
-from gym import spaces
+from gymnasium import spaces
 
 from luxai_s3.wrappers import LuxAIS3GymEnv
 
@@ -13,6 +13,8 @@ class SB3Wrapper(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         self.env = env        
         self.action_space = spaces.MultiDiscrete([ 5 ] * env.env_params.max_units)
+        self.old_team_points = 0
+        self.old_team_wins = 0
 
     def step(self, action: npt.NDArray):
         
@@ -26,25 +28,50 @@ class SB3Wrapper(gym.Wrapper):
         }
         
         # Completely ignore sapping
-        obs, reward, terminated, truncated, info  = self.env.step(lux_action)
-        manufactured_reward = reward["player_0"]
+        obs, reward, terminated, truncated, _  = self.env.step(lux_action)
+        new_team_points = obs["player_0"]["team_points"]
+        new_team_wins = obs["player_0"]["team_wins"]
+        
+        diff_points = new_team_points - self.old_team_points
+        diff_wins = new_team_wins - self.old_team_wins
+        diff_wins_sum = np.sum(diff_wins)
+
+        # Game or match is over so reset diff
+        if diff_wins_sum != 0:
+            diff_points = np.zeros(2)
+
+        # Match is reset so diff_wins should be 0
+        if diff_wins_sum < 0:
+            diff_wins = np.zeros(2)
+        
+        manufactured_reward = np.dot(diff_points, [10,0])
+        self.old_team_points = new_team_points
+        self.old_team_wins = new_team_wins
+
         single_player_terminated = terminated["player_0"]
         single_player_truncated = truncated["player_0"]
+
+        info = dict()
+        metrics = dict()
+        metrics["rewards"] = manufactured_reward
+
+        # we can save the metrics to info so we can use tensorboard to log them to get a glimpse into how our agent is behaving
+        info["metrics"] = metrics
 
         return obs, manufactured_reward, single_player_terminated, single_player_truncated, info
 
 
 class ObservationWrapper(gym.ObservationWrapper):
 
-    def __init__(self, player: str, env: gym.Env):
+    def __init__(self, player: str, env: gym.Env, env_cfg):
         super().__init__(env)
         self.player = player
-        self.transformer = ObservationTransformer(player, env.env_params)
+        self.transformer = ObservationTransformer(player, env_cfg)
         self.observation_space = spaces.Box(0, 1, shape=(self.transformer.observation_space_size,))
 
     def observation(self, obs):
         player_obs = obs[self.player]
-        return self.observation_space.transform(player_obs)
+        return self.transformer.transform(player_obs)
 
 class ObservationTransformer:
 
@@ -59,7 +86,10 @@ class ObservationTransformer:
         self.discovered_relic_nodes_mask = np.zeros(self.params.max_relic_nodes, dtype=bool)
         self.discovered_relic_node_positions =  np.full((self.params.max_relic_nodes, 2), -1, dtype=np.int16)
 
-        self.observation_space_size = self.params.max_units * 3  + self.params.max_relic_nodes * 3 # one for masks, one for x pos, one for y pos
+        self.observation_space_size = (
+            self.params.max_units * 3  + # one for masks, one for x pos, one for y pos
+            self.params.max_relic_nodes * 3 # one for masks, one for x pos, one for y pos
+        )
 
     @staticmethod
     def normalize_positions(input, env_cfg):
@@ -89,4 +119,7 @@ class ObservationTransformer:
         new_observation = np.concatenate(
                 [unit_mask, norm_and_flat_unit_positions, self.discovered_relic_nodes_mask, norm_and_flat_relic_positions])
 
+        if observed_relic_nodes_mask.any():
+            print("new relic")
+            
         return new_observation

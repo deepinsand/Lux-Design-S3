@@ -3,7 +3,6 @@ from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.ppo import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
-from gym.wrappers import TimeLimit
 from luxai_s3.wrappers import LuxAIS3GymEnv, RecordEpisode
 from wrapper import SB3Wrapper, ObservationWrapper
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
@@ -22,29 +21,25 @@ class TensorboardCallback(BaseCallback):
     def _on_step(self) -> bool:
         c = 0
 
-        # for i, done in enumerate(self.locals["dones"]):
-        #     if done:
-        #         info = self.locals["infos"][i]
-        #         c += 1
-        #         for k in info["metrics"]:
-        #             stat = info["metrics"][k]
-        #             self.logger.record_mean(f"{self.tag}/{k}", stat)
+        for i, done in enumerate(self.locals["dones"]):
+            if done:
+                info = self.locals["infos"][i]
+                c += 1
+                for k in info["metrics"]:
+                    stat = info["metrics"][k]
+                    self.logger.record_mean(f"{self.tag}/{k}", stat)
         return True
     
 def make_env(seed: int = 0):
     def _init():
 
         env = LuxAIS3GymEnv(numpy_output=True)
-
-        # Add a SB3 wrapper to make it work with SB3 and simplify the action space with the controller
-        # this will remove the bidding phase and factory placement phase. For factory placement we use
-        # the provided place_near_random_ice function which will randomly select an ice tile and place a factory near it.
+        env_cfg = env.env_params
         env = SB3Wrapper(env)
         
-        # changes observation to include a few simple features
-        env = ObservationWrapper("player_0", env)        
+        env = ObservationWrapper("player_0", env, env_cfg)        
         
-        #env = Monitor(env) # for SB3 to allow it to record metrics
+        env = Monitor(env) # for SB3 to allow it to record metrics
         env.reset(seed=seed)
         set_random_seed(seed)
         return env
@@ -54,7 +49,7 @@ def make_env(seed: int = 0):
 if __name__ == "__main__":
 
     set_random_seed(42)
-    log_path = "logs/exp_1"
+    log_path = "logs/exp_2"
     num_envs = min(4, multiprocessing.cpu_count())
 
     # set max episode steps to 200 for training environments to train faster
@@ -66,7 +61,7 @@ if __name__ == "__main__":
     eval_env = VecEnv([make_env(i) for i in range(num_envs)])
     eval_env.reset()
     n_steps = 400
-    policy_kwargs = dict(net_arch=(128, 128))
+    policy_kwargs = dict(net_arch=(1024, 1024))
     model = PPO(
         "MlpPolicy",
         env,
@@ -91,7 +86,7 @@ if __name__ == "__main__":
         n_eval_episodes=5,
     )
 
-    total_timesteps = n_steps * num_envs * 100
+    total_timesteps = n_steps * num_envs * 500
     model.learn(
         total_timesteps,
         callback=[TensorboardCallback(tag="train_metrics"), eval_callback],
