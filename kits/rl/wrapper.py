@@ -44,7 +44,7 @@ class SB3Wrapper(gym.Wrapper):
         if diff_wins_sum < 0:
             diff_wins = np.zeros(2)
         
-        manufactured_reward = np.dot(diff_points, [10,0])
+        manufactured_reward = np.dot(diff_points, [100,0])
         self.old_team_points = new_team_points
         self.old_team_wins = new_team_wins
 
@@ -118,8 +118,5 @@ class ObservationTransformer:
 
         new_observation = np.concatenate(
                 [unit_mask, norm_and_flat_unit_positions, self.discovered_relic_nodes_mask, norm_and_flat_relic_positions])
-
-        if observed_relic_nodes_mask.any():
-            print("new relic")
             
         return new_observation

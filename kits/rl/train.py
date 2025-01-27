@@ -49,7 +49,7 @@ def make_env(seed: int = 0):
 if __name__ == "__main__":
 
     set_random_seed(42)
-    log_path = "logs/exp_2"
+    log_path = "logs/exp_3"
     num_envs = min(4, multiprocessing.cpu_count())
 
     # set max episode steps to 200 for training environments to train faster
@@ -60,8 +60,8 @@ if __name__ == "__main__":
     # set max episode steps to 1000 to match original environment
     eval_env = VecEnv([make_env(i) for i in range(num_envs)])
     eval_env.reset()
-    n_steps = 400
-    policy_kwargs = dict(net_arch=(1024, 1024))
+    n_steps = 505
+    policy_kwargs = dict(net_arch=(256, 256))
     model = PPO(
         "MlpPolicy",
         env,
@@ -86,7 +86,7 @@ if __name__ == "__main__":
         n_eval_episodes=5,
     )
 
-    total_timesteps = n_steps * num_envs * 500
+    total_timesteps = n_steps * num_envs * 200
     model.learn(
         total_timesteps,
         callback=[TensorboardCallback(tag="train_metrics"), eval_callback],
