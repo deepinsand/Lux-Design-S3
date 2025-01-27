@@ -15,6 +15,7 @@ class SB3Wrapper(gym.Wrapper):
         self.action_space = spaces.MultiDiscrete([ 5 ] * env.env_params.max_units)
         self.old_team_points = 0
         self.old_team_wins = 0
+        self.last_obs = None
 
     def step(self, action: npt.NDArray):
         
@@ -29,6 +30,7 @@ class SB3Wrapper(gym.Wrapper):
         
         # Completely ignore sapping
         obs, reward, terminated, truncated, _  = self.env.step(lux_action)
+        self.last_obs = obs
         new_team_points = obs["player_0"]["team_points"]
         new_team_wins = obs["player_0"]["team_wins"]
         
@@ -59,6 +61,48 @@ class SB3Wrapper(gym.Wrapper):
         info["metrics"] = metrics
 
         return obs, manufactured_reward, single_player_terminated, single_player_truncated, info
+    
+    @staticmethod
+    def action_mask(env_params, obs):
+        
+        unit_mask = np.array(obs["units_mask"][0]) # shape (max_units, )
+        unit_positions = np.array(obs["units"]["position"][0]) # shape (max_units, 2)
+        sensor_mask = np.array(obs["sensor_mask"]) # shape (W, H)
+        asteroid_grid = np.array(obs["map_features"]["tile_type"]) == 2 # shape (W, H)
+        asteroid_pos = np.argwhere(asteroid_grid)
+        num_asteroids = len(asteroid_pos)
+
+        action_diffs = [
+            [0, 0],  # Do nothing
+            [0, -1],  # Move up
+            [1, 0],  # Move right
+            [0, 1],  # Move down
+            [-1, 0],  # Move left
+        ]
+
+        unit_3d = np.stack([unit_positions] * 5, axis=1) + action_diffs
+        off_the_map = np.isin(unit_3d, [-1, env_params.map_height])
+        mask = ~off_the_map.any(axis=2)
+
+        # Each row represents a unit, then 5 copies of the coordinates each representing an action
+        if num_asteroids > 0:
+            unit_3d = np.stack([unit_positions] * 5, axis=1) + action_diffs
+            unit_4d = unit_3d[:, :, :, np.newaxis] == asteroid_pos[np.newaxis, np.newaxis, :, :]
+
+        
+        
+        return mask
+
+
+    @staticmethod
+    def training_mask_wrapper(env):
+        if (env.last_obs is None):
+            return np.ones((env.env.env_params.max_units, 5), dtype=int)
+
+        return SB3Wrapper.action_mask(env.env.env_params, env.last_obs["player_0"])   
+    
+    
+
 
 
 class ObservationWrapper(gym.ObservationWrapper):
@@ -90,6 +134,7 @@ class ObservationTransformer:
             self.params.max_units * 3  + # one for masks, one for x pos, one for y pos
             self.params.max_relic_nodes * 3 # one for masks, one for x pos, one for y pos
         )
+
 
     @staticmethod
     def normalize_positions(input, env_cfg):

@@ -6,6 +6,16 @@ from stable_baselines3.common.monitor import Monitor
 from luxai_s3.wrappers import LuxAIS3GymEnv, RecordEpisode
 from wrapper import SB3Wrapper, ObservationWrapper
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+
+import gymnasium as gym
+import numpy as np
+
+from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
+from sb3_contrib.common.wrappers import ActionMasker
+from sb3_contrib.ppo_mask import MaskablePPO
+
+
+
 import multiprocessing
 import platform
 import sys
@@ -37,7 +47,12 @@ def make_env(seed: int = 0):
         env_cfg = env.env_params
         env = SB3Wrapper(env)
         
+        env = ActionMasker(env, SB3Wrapper.training_mask_wrapper)  # Wrap to enable masking
+
+
         env = ObservationWrapper("player_0", env, env_cfg)        
+
+
         
         env = Monitor(env) # for SB3 to allow it to record metrics
         env.reset(seed=seed)
@@ -61,10 +76,9 @@ if __name__ == "__main__":
     eval_env = VecEnv([make_env(i) for i in range(num_envs)])
     eval_env.reset()
     n_steps = 505
-    policy_kwargs = dict(net_arch=(256, 256))
-    model = PPO(
-        "MlpPolicy",
-        env,
+    policy_kwargs = dict(net_arch=(128, 128))
+
+    model = MaskablePPO(MaskableActorCriticPolicy, env, 
         n_steps=n_steps,
         batch_size=n_steps * num_envs // 8,
         learning_rate=3e-4,
