@@ -104,7 +104,7 @@ window.episode = {json.dumps(replay)};
         start_tasks = []
         save_replay = self.cfg.save_replay_path is not None
         for i in range(2):
-            player = Bot(self.players[i], f"player_{i}", i, verbose=self.log.verbosity)
+            player = Bot(self.players[i], f"player_{i}", i, verbose=self.log.verbosity, direct_import_python_bots=True)
             player.proc.log.identifier = player.log.identifier
             players[player.agent] = player
             start_tasks += [player.proc.start()]

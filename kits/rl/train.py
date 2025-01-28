@@ -1,10 +1,10 @@
 import os.path as osp
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.ppo import PPO
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from luxai_s3.wrappers import LuxAIS3GymEnv, RecordEpisode
-from wrapper import SB3Wrapper, ObservationWrapper
+from wrapper import SB3Wrapper, ObservationWrapper, ObservationTransformer
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 import gymnasium as gym
@@ -19,6 +19,8 @@ from sb3_contrib.ppo_mask import MaskablePPO
 import multiprocessing
 import platform
 import sys
+
+experiment_number = 3
 
 def in_debugger():
     return sys.gettrace() is not None
@@ -44,13 +46,12 @@ def make_env(seed: int = 0):
     def _init():
 
         env = LuxAIS3GymEnv(numpy_output=True)
-        env_cfg = env.env_params
-        env = SB3Wrapper(env)
-        
+        transformer = ObservationTransformer("player_0", env.env_params)
+        env = SB3Wrapper("player_0", env, transformer)
         env = ActionMasker(env, SB3Wrapper.training_mask_wrapper)  # Wrap to enable masking
 
 
-        env = ObservationWrapper("player_0", env, env_cfg)        
+        env = ObservationWrapper("player_0", env, transformer)        
 
 
         
@@ -64,19 +65,24 @@ def make_env(seed: int = 0):
 if __name__ == "__main__":
 
     set_random_seed(42)
-    log_path = "logs/exp_3"
+    log_path = "logs/exp_" + str(experiment_number)
     num_envs = min(4, multiprocessing.cpu_count())
 
     # set max episode steps to 200 for training environments to train faster
     VecEnv = DummyVecEnv if in_debugger() else SubprocVecEnv
 
     env = VecEnv([make_env(i) for i in range(num_envs)])
+    env = VecNormalize(env, norm_obs=False, norm_reward=True) # Observation normalization is handled by the custom wrappers
     env.reset()
+
     # set max episode steps to 1000 to match original environment
     eval_env = VecEnv([make_env(i) for i in range(num_envs)])
+    eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=False) # Don't normalize rewards so the eval statistics can be used for something
+    eval_env.training = False
+
     eval_env.reset()
     n_steps = 505
-    policy_kwargs = dict(net_arch=(128, 128))
+    policy_kwargs = dict(net_arch=(256, 256))
 
     model = MaskablePPO(MaskableActorCriticPolicy, env, 
         n_steps=n_steps,
@@ -100,7 +106,7 @@ if __name__ == "__main__":
         n_eval_episodes=5,
     )
 
-    total_timesteps = n_steps * num_envs * 200
+    total_timesteps = n_steps * num_envs * 1000
     model.learn(
         total_timesteps,
         callback=[TensorboardCallback(tag="train_metrics"), eval_callback],

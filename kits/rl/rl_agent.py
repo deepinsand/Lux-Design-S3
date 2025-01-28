@@ -7,6 +7,8 @@ from wrapper import ObservationTransformer
 from luxai_s3.params import EnvParams
 from wrapper import SB3Wrapper
 # Load the saved model
+from train import experiment_number
+
 
 class Agent():
 
@@ -15,13 +17,12 @@ class Agent():
         env_cfg = EnvParams(**env_cfg)
         self.transformer = ObservationTransformer(player, env_cfg)
         self.env_cfg = env_cfg
-        self.model = MaskablePPO.load("logs/exp_3/models/latest_model.zip")
+        self.model = MaskablePPO.load(f"logs/exp_{experiment_number}/models/latest_model.zip")
 
 
-    def act(self, step: int, obs, remainingOverageTime: int = 60):
-        
-        action_mask = SB3Wrapper.action_mask(self.env_cfg, obs)
-        new_obs = self.transformer.transform(obs)
+    def act(self, step: int, obs, remainingOverageTime: int = 60):  
+        action_mask = ObservationTransformer.action_mask(self.env_cfg, obs)
+        new_obs = self.transformer.transform_observation(obs)
         action, _ = self.model.predict(new_obs, action_mask)
 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
