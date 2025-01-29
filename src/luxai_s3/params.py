@@ -9,15 +9,15 @@ class EnvParams:
     max_steps_in_match: int = 100
     map_type: int = 1
     """Map generation algorithm. Can change between games"""
-    map_width: int = 16
-    map_height: int = 16
+    map_width: int = 8 # 24
+    map_height: int = 8 # 24
     num_teams: int = 2
     match_count_per_episode: int = 5
     """number of matches to play in one episode"""
 
     # configs for units
-    max_units: int = 1
-    init_unit_energy: int = 1000
+    max_units: int = 1  # 16
+    init_unit_energy: int = 1000  # 100?
     min_unit_energy: int = 0
     max_unit_energy: int = 400
     unit_move_cost: int = 2

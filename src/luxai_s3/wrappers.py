@@ -153,14 +153,43 @@ class RecordEpisode(gym.Wrapper):
 
     def save_episode(self, save_path: str):
         episode = self.serialize_episode_data()
-        with open(save_path, "w") as f:
+
+        with open(save_path + ".json", "w") as f:
             json.dump(episode, f)
+
+
+        with open(save_path + ".html", "w") as f:
+            f.write(
+                    f"""
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="https://s3vis.lux-ai.org/eye.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Lux Eye S3</title>
+
+    <script>
+window.episode = {json.dumps(episode)};
+    </script>
+
+    <script type="module" crossorigin src="https://s3vis.lux-ai.org/index.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+                """.strip()
+                )
+
+
         self.episode = dict(states=[], actions=[], metadata=dict())
 
     def _save_episode_and_reset(self):
         """saves to generated path based on self.save_dir and episoe id and updates relevant counters"""
         self.save_episode(
-            os.path.join(self.save_dir, f"episode_{self.episode_id}.json")
+            os.path.join(self.save_dir, f"episode_{self.episode_id}")
         )
         self.episode_id += 1
         self.episode_steps = 0

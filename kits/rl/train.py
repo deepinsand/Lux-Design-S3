@@ -19,8 +19,20 @@ from sb3_contrib.ppo_mask import MaskablePPO
 import multiprocessing
 import platform
 import sys
+import os
+import shutil
 
 experiment_number = 4
+log_path = "logs/exp_" + str(experiment_number)
+replay_path = f"{log_path}/eval_logs/replays"
+
+
+def clear_dir(relative_path):
+    full_path = os.path.abspath(relative_path)  # Get the absolute path
+    try:
+        shutil.rmtree(full_path)  # Remove the directory and its contents
+    except FileNotFoundError:
+        pass  # Directory doesn't exist, so do nothing
 
 def in_debugger():
     return sys.gettrace() is not None
@@ -42,22 +54,24 @@ class TensorboardCallback(BaseCallback):
                     self.logger.record_mean(f"{self.tag}/{k}", stat)
         return True
     
-def make_env(seed: int = 0):
+def make_env(seed: int = 0, record: bool = False):
     def _init():
 
         env = LuxAIS3GymEnv(numpy_output=True)
-        transformer = ObservationTransformer("player_0", env.env_params)
-        env = SB3Wrapper("player_0", env, transformer)
+        env_params = env.env_params
+        if (record):
+            env = RecordEpisode(env, save_on_close=True, save_on_reset=True, save_dir=replay_path)
+
+        transformer = ObservationTransformer("player_0", env_params)
+        env = SB3Wrapper("player_0", env, env_params, transformer)
         env = ActionMasker(env, SB3Wrapper.training_mask_wrapper)  # Wrap to enable masking
 
 
         env = ObservationWrapper("player_0", env, transformer)        
-
-
-        
         env = Monitor(env) # for SB3 to allow it to record metrics
+
+
         env.reset(seed=seed)
-        set_random_seed(seed)
         return env
 
     return _init
@@ -65,9 +79,9 @@ def make_env(seed: int = 0):
 if __name__ == "__main__":
 
     set_random_seed(42)
-    log_path = "logs/exp_" + str(experiment_number)
     num_envs = min(4, multiprocessing.cpu_count())
 
+    clear_dir(replay_path)
     # set max episode steps to 200 for training environments to train faster
     VecEnv = DummyVecEnv if in_debugger() else SubprocVecEnv
 
@@ -76,7 +90,7 @@ if __name__ == "__main__":
     env.reset()
 
     # set max episode steps to 1000 to match original environment
-    eval_env = VecEnv([make_env(i) for i in range(num_envs)])
+    eval_env = VecEnv([make_env(i, record=(i==0)) for i in range(num_envs)])
     eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=False) # Don't normalize rewards so the eval statistics can be used for something
     eval_env.training = False
 
@@ -100,13 +114,12 @@ if __name__ == "__main__":
         eval_env,
         best_model_save_path=osp.join(log_path, "models"),
         log_path=osp.join(log_path, "eval_logs"),
-        eval_freq=24_000,
+        eval_freq=n_steps * num_envs * 10,
         deterministic=False,
-        render=False,
         n_eval_episodes=5,
     )
 
-    total_timesteps = n_steps * num_envs * 1000
+    total_timesteps = n_steps * num_envs * 100
     model.learn(
         total_timesteps,
         callback=[TensorboardCallback(tag="train_metrics"), eval_callback],

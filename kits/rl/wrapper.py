@@ -10,23 +10,25 @@ class SB3Wrapper(gym.Wrapper):
         self,
         player: str,
         env: LuxAIS3GymEnv, 
+        env_params,
         transformer
     ) -> None:
         gym.Wrapper.__init__(self, env)
         self.player = player
+        self.env_params = env_params
         self.env = env        
-        self.action_space = spaces.MultiDiscrete([ 5 ] * env.env_params.max_units)
+        self.action_space = spaces.MultiDiscrete([ 5 ] * env_params.max_units)
         self.transformer = transformer
 
     def step(self, action: npt.NDArray):
         
         # here, for each agent in the game we translate their action into a Lux S2 action
         
-        single_player_lux_action = np.zeros((self.env.env_params.max_units, 3), dtype=int)
+        single_player_lux_action = np.zeros((self.env_params.max_units, 3), dtype=int)
         single_player_lux_action[:, 0] = action
         lux_action = {
             "player_0": single_player_lux_action, 
-            "player_1": np.zeros((self.env.env_params.max_units, 3), dtype=int)
+            "player_1": np.zeros((self.env_params.max_units, 3), dtype=int)
         }
         
         # Completely ignore sapping
@@ -37,7 +39,7 @@ class SB3Wrapper(gym.Wrapper):
         single_player_terminated = terminated[self.player]
         single_player_truncated = truncated[self.player]
 
-        info = dict()
+        #info = dict()
         metrics = dict()
         #metrics["rewards"] = manufactured_reward
 
@@ -50,9 +52,9 @@ class SB3Wrapper(gym.Wrapper):
     @staticmethod
     def training_mask_wrapper(env):
         if (env.transformer.last_obs is None):
-            return np.ones((env.env.env_params.max_units, 5), dtype=int)
+            return np.ones((env.env_params.max_units, 5), dtype=int)
 
-        return ObservationTransformer.action_mask(env.env.env_params, env.transformer.last_obs)   
+        return ObservationTransformer.action_mask(env.env_params, env.transformer.last_obs)   
     
     
 

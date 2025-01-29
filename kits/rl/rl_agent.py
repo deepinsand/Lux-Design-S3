@@ -21,7 +21,7 @@ class Agent():
         self.model = MaskablePPO.load(f"logs/exp_{experiment_number}/models/latest_model.zip")
 
         #DEBUG NEED TO DELETE
-        set_random_seed(1)
+        set_random_seed(42)
         
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):  
