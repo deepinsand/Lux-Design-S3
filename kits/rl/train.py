@@ -20,7 +20,7 @@ import multiprocessing
 import platform
 import sys
 
-experiment_number = 3
+experiment_number = 4
 
 def in_debugger():
     return sys.gettrace() is not None

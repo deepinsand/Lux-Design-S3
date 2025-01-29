@@ -176,15 +176,20 @@ class ObservationTransformer:
             [-1, 0],  # Move left
         ]
 
-        unit_3d = np.stack([unit_positions] * 5, axis=1) + action_diffs
+        # Each row represents a unit, then 5 copies of the coordinates each representing an action
+        unit_3d = np.stack([unit_positions] * 5, axis=1) + action_diffs 
+        
         off_the_map = np.isin(unit_3d, [-1, env_params.map_height])
         mask = ~off_the_map.any(axis=2)
 
         # Each row represents a unit, then 5 copies of the coordinates each representing an action
         if num_asteroids > 0:
-            unit_3d = np.stack([unit_positions] * 5, axis=1) + action_diffs
-            unit_4d = unit_3d[:, :, :, np.newaxis] == asteroid_pos[np.newaxis, np.newaxis, :, :]
-        
+            # Broadcast the two, adding dimensions for combinatorial explosion.  Axis were added to dimensions that I thought needed adding to?
+            unit_4d = unit_3d[:, :, np.newaxis, :] == asteroid_pos[np.newaxis, np.newaxis, :, :]
+            any_collisions = unit_4d.all(axis=3) # last dimension is of shape 2, representing x,y coordinates.  Need all to match for collision
+            asteroid_mask = ~any_collisions.any(axis=2) # last dimension is of shape num_asteriods, and the action is invalid if it hits any asteroid
+            mask = mask & asteroid_mask
+
         return mask
 
     @staticmethod
