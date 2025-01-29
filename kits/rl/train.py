@@ -119,7 +119,7 @@ if __name__ == "__main__":
         n_eval_episodes=5,
     )
 
-    total_timesteps = n_steps * num_envs * 100
+    total_timesteps = n_steps * num_envs * 500
     model.learn(
         total_timesteps,
         callback=[TensorboardCallback(tag="train_metrics"), eval_callback],
