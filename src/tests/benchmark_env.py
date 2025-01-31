@@ -2,6 +2,11 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Annotated
 import jax
+
+# Update the default device to the CPU
+#jax.config.update("jax_default_device", jax.devices("cpu")[0])
+
+
 import jax.numpy as jnp
 import tyro
 from luxai_s3.params import EnvParams
@@ -18,7 +23,7 @@ class Args:
 
 if __name__ == "__main__":
     import numpy as np
-    jax.config.update('jax_numpy_dtype_promotion', 'strict')
+    jax.config.update('jax_numpy_dtype_promotion', 'standard')
     args = tyro.cli(Args)
 
     np.random.seed(args.seed)

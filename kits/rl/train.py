@@ -1,3 +1,7 @@
+import jax
+# Update the default device to the CPU
+#jax.config.update("jax_default_device", jax.devices("cpu")[0])
+
 import os.path as osp
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.ppo import PPO
@@ -64,7 +68,7 @@ def make_env(seed: int = 0, record: bool = False):
 
         transformer = ObservationTransformer("player_0", env_params)
         env = SB3Wrapper("player_0", env, env_params, transformer)
-        env = ActionMasker(env, SB3Wrapper.training_mask_wrapper)  # Wrap to enable masking
+        #env = ActionMasker(env, SB3Wrapper.training_mask_wrapper)  # Wrap to enable masking
 
 
         env = ObservationWrapper("player_0", env, transformer)        
@@ -95,12 +99,14 @@ if __name__ == "__main__":
     eval_env.training = False
 
     eval_env.reset()
-    n_steps = 505
+    n_steps = 506
     policy_kwargs = dict(net_arch=(256, 256))
 
-    model = MaskablePPO(MaskableActorCriticPolicy, env, 
+    model = PPO(
+        "MlpPolicy",
+        env, 
         n_steps=n_steps,
-        batch_size=n_steps * num_envs // 8,
+        batch_size=(n_steps * num_envs // 8),
         learning_rate=3e-4,
         policy_kwargs=policy_kwargs,
         verbose=1,
@@ -119,7 +125,7 @@ if __name__ == "__main__":
         n_eval_episodes=5,
     )
 
-    total_timesteps = n_steps * num_envs * 500
+    total_timesteps = n_steps * num_envs * 5
     model.learn(
         total_timesteps,
         callback=[TensorboardCallback(tag="train_metrics"), eval_callback],
