@@ -6,7 +6,7 @@ from typing import Literal
 import numpy as np
 
 import psutil
-import pynvml
+#import pynvml
 import subprocess as sp
 def flatten_dict_keys(d: dict, prefix=""):
     """Flatten a dict by expanding its keys recursively."""
@@ -29,10 +29,10 @@ class Profiler:
         self.synchronize_torch = synchronize_torch
         self.stats = defaultdict(list)
         # Initialize NVML
-        pynvml.nvmlInit()
+        #pynvml.nvmlInit()
 
         # Get handle for the first GPU (index 0)
-        self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        #self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
 
         # Get the PID of the current process
         self.current_pid = os.getpid()
@@ -131,7 +131,7 @@ class Profiler:
 
     def get_current_process_gpu_memory(self):
         # Get all processes running on the GPU
-        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(self.handle)
+        processes = []#pynvml.nvmlDeviceGetComputeRunningProcesses(self.handle)
 
         # Iterate through the processes to find the current process
         for process in processes:

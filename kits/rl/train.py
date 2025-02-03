@@ -86,8 +86,9 @@ if __name__ == "__main__":
     num_envs = min(4, multiprocessing.cpu_count())
 
     clear_dir(replay_path)
-    # set max episode steps to 200 for training environments to train faster
-    VecEnv = DummyVecEnv if in_debugger() else SubprocVecEnv
+    
+    # Using DummyVecEnv since JAX provides massive parallelization?
+    VecEnv = DummyVecEnv #if in_debugger() else SubprocVecEnv
 
     env = VecEnv([make_env(i) for i in range(num_envs)])
     env = VecNormalize(env, norm_obs=False, norm_reward=True) # Observation normalization is handled by the custom wrappers
