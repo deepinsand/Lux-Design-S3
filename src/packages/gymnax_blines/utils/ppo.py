@@ -105,15 +105,16 @@ class BatchManager:
 
 
 class RolloutManager(object):
-    def __init__(self, model, env_name, env_kwargs, env_params):
+    def __init__(self, model, env, env_params):
         # Setup functionalities for vectorized batch rollout
-        self.env_name = env_name
-        self.env, self.env_params = gymnax.make(env_name, **env_kwargs)
-        self.env_params = self.env_params.replace(**env_params)
+        #self.env_name = env_name
+        self.env = env
+        self.env_params = env_params
         self.observation_space = self.env.observation_space(self.env_params)
         self.action_size = self.env.action_space(self.env_params).shape
         self.apply_fn = model.apply
         self.select_action = self.select_action_ppo
+
 
     @partial(jax.jit, static_argnums=0)
     def select_action_ppo(
@@ -129,6 +130,7 @@ class RolloutManager(object):
 
     @partial(jax.jit, static_argnums=0)
     def batch_reset(self, keys):
+        # todo: ADD PARAM RANDOMIZATION
         return jax.vmap(self.env.reset, in_axes=(0, None))(
             keys, self.env_params
         )
@@ -198,7 +200,7 @@ def policy(
     return value, pi
 
 
-def train_ppo(rng, config, model, params, mle_log):
+def train_ppo(rng, config, model, params, mle_log, env, env_params):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
     num_total_epochs = int(config.num_train_steps // config.num_train_envs + 1)
     num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
@@ -221,7 +223,9 @@ def train_ppo(rng, config, model, params, mle_log):
     )
     # Setup the rollout manager -> Collects data in vmapped-fashion over envs
     rollout_manager = RolloutManager(
-        model, config.env_name, config.env_kwargs, config.env_params
+        model, 
+        env,
+        env_params
     )
 
     batch_manager = BatchManager(

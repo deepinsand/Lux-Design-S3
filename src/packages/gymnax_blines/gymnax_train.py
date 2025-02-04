@@ -1,28 +1,39 @@
 import os
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 import jax
-from utils.models import get_model_ready
-from utils.helpers import load_config, save_pkl_object
+from packages.gymnax_blines.utils.models import get_model_ready
+from packages.gymnax_blines.utils.helpers import load_config, save_pkl_object
 
+from luxai_s3.params import EnvParams
+from luxai_s3.env import LuxAIS3Env
+from luxai_s3.params import env_params_ranges
+
+from packages.gymnax_blines.gymnax_wrapper import LuxaiS3GymnaxWrapper
 
 def main(config, mle_log, log_ext=""):
     """Run training with ES or PPO. Store logs and agent ckpt."""
     rng = jax.random.PRNGKey(config.seed_id)
     # Setup the model architecture
     rng, rng_init = jax.random.split(rng)
-    model, params = get_model_ready(rng_init, config)
+
+    env_params = EnvParams()
+    env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_params)
+    wrapped_env = LuxaiS3GymnaxWrapper(env, "player_0")
+
+    model, params = get_model_ready(rng_init, config, env=wrapped_env, env_params=env_params)
 
     # Run the training loop (either evosax ES or PPO)
     if config.train_type == "ES":
-        from utils.es import train_es as train_fn
+        from packages.gymnax_blines.utils.es import train_es as train_fn
     elif config.train_type == "PPO":
-        from utils.ppo import train_ppo as train_fn
+        from packages.gymnax_blines.utils.ppo import train_ppo as train_fn
     else:
         raise ValueError("Unknown train_type. Has to be in ('ES', 'PPO').")
 
+
     # Log and store the results.
     log_steps, log_return, network_ckpt = train_fn(
-        rng, config, model, params, mle_log
+        rng, config, model, params, mle_log, wrapped_env, env_params
     )
 
     data_to_store = {
@@ -54,7 +65,7 @@ if __name__ == "__main__":
         "-config",
         "--config_fname",
         type=str,
-        default="configs/CartPole-v1/ppo.yaml",
+        default="ppo.yaml",
         help="Path to configuration yaml.",
     )
     parser.add_argument(

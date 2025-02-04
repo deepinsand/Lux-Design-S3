@@ -6,10 +6,11 @@ from evosax import NetworkMapper
 import gymnax
 
 
-def get_model_ready(rng, config, speed=False):
+def get_model_ready(rng, config, env=None, env_params=None, speed=False):
     """Instantiate a model according to obs shape of environment."""
     # Get number of desired output units
-    env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
+    if env is None and env_params is None:
+        env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
 
     # Instantiate model class (flax-based)
     if config.train_type == "ES":
@@ -19,7 +20,7 @@ def get_model_ready(rng, config, speed=False):
     elif config.train_type == "PPO":
         if config.network_name == "Categorical-MLP":
             model = CategoricalSeparateMLP(
-                **config.network_config, num_output_units=env.num_actions
+                **config.network_config, num_output_units=env.num_actions, action_space=env.action_space()
             )
         elif config.network_name == "Gaussian-MLP":
             model = GaussianSeparateMLP(
@@ -56,9 +57,10 @@ def default_mlp_init(scale=0.05):
 class CategoricalSeparateMLP(nn.Module):
     """Split Actor-Critic Architecture for PPO."""
 
-    num_output_units: int
+    action_space: int
     num_hidden_units: int
     num_hidden_layers: int
+    num_output_units: int
     prefix_actor: str = "actor"
     prefix_critic: str = "critic"
     model_name: str = "separate-mlp"
@@ -120,8 +122,29 @@ class CategoricalSeparateMLP(nn.Module):
             self.num_output_units,
             bias_init=default_mlp_init(),
         )(x_a)
+
+        
+        # Add if there are more than one dims?
+        num_agents = self.action_space.shape[0]
+        num_actions_per_agent = self.num_output_units // num_agents
+
+        if logits.ndim == 1: # Non batched
+            logits = logits.reshape((num_agents, num_actions_per_agent))
+            pi = tfp.distributions.Independent(
+                tfp.distributions.Categorical(logits=logits),
+                reinterpreted_batch_ndims=1
+            )
+        else:
+            batch_size = logits.shape[0]
+            logits = logits.reshape((batch_size, num_agents, num_actions_per_agent))
+            pi = tfp.distributions.Independent(
+                tfp.distributions.Categorical(logits=logits),
+                reinterpreted_batch_ndims=1
+            )
+
         # pi = distrax.Categorical(logits=logits)
-        pi = tfp.distributions.Categorical(logits=logits)
+
+        #pi = tfp.distributions.Categorical(logits=logits)
         return v, pi
 
 

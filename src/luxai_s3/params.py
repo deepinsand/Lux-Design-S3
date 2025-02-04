@@ -7,13 +7,19 @@ MAP_TYPES = ["dev0", "random"]
 @struct.dataclass
 class EnvParams:
     max_steps_in_match: int = 100
+
+
     map_type: int = 1
     """Map generation algorithm. Can change between games"""
-    map_width: int = 16 # 24
-    map_height: int = 16 # 24
+    map_width: int = 8 # 24
+    map_height: int = 8 # 24
     num_teams: int = 2
     match_count_per_episode: int = 5
     """number of matches to play in one episode"""
+
+    # maybe add 
+    max_steps_in_episode: int = max_steps_in_match * match_count_per_episode
+
 
     # configs for units
     max_units: int = 1  # 16

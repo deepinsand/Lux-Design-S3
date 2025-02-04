@@ -82,8 +82,8 @@ class Bot:
                 )
         except asyncio.TimeoutError:
             action = None
-        except:
-            import ipdb;ipdb.set_trace()
+        #except:
+            #import ipdb;ipdb.set_trace()
         time_used = time.time() - stime
         if stderr != "" and stderr is not None:
             self.log.err(f"stderr:\n{stderr}")

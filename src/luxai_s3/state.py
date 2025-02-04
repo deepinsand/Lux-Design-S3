@@ -20,14 +20,14 @@ ENERGY_NODE_FNS = [
 class UnitState:
     position: chex.Array
     """Position of the unit with shape (2) for x, y"""
-    energy: int
+    energy: chex.Array #int
     """Energy of the unit"""
 
 @struct.dataclass
 class MapTile:
-    energy: int
+    energy: chex.Array #int
     """Energy of the tile, generated via energy_nodes and energy_node_fns"""
-    tile_type: int
+    tile_type: chex.Array #int
     """Type of the tile"""
 
 @struct.dataclass
