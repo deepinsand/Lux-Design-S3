@@ -8,7 +8,7 @@ from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
 import gymnax
-from .wrappers import LogWrapper, FlattenObservationWrapper
+from .wrappers import LogWrapper, FlattenObservationWrapper, NormalizeVecReward
 import math
 from .jax_debug import debuggable_vmap, debuggable_scan
 
@@ -79,6 +79,7 @@ def make_train(config, env=None, env_params=None):
 
     env = FlattenObservationWrapper(env)
     env = LogWrapper(env)
+    env = NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
         frac = (
