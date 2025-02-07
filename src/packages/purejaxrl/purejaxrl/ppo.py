@@ -36,7 +36,6 @@ class ActorCritic(nn.Module):
         #pi = distrax.Categorical(logits=actor_mean)
 
         actor_mean = actor_mean.reshape((-1, *self.action_dim))
-
         pi = distrax.Independent(
             distrax.Categorical(logits=actor_mean),
             reinterpreted_batch_ndims=1
@@ -66,19 +65,18 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def make_train(config, env=None, env_params=None):
+def make_train(config, writer, env=None, env_params=None):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    
     if env is None and env_params is None:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
     env = FlattenObservationWrapper(env)
-    env = LogWrapper(env)
+    env = LogWrapper(env)  # Log rewards before normalizing 
     env = NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
@@ -120,7 +118,7 @@ def make_train(config, env=None, env_params=None):
         obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
 
         # TRAIN LOOP
-        def _update_step(runner_state, unused):
+        def _update_step(runner_state, update_count):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, rng = runner_state
@@ -196,21 +194,19 @@ def make_train(config, env=None, env_params=None):
                         value_loss = (
                             0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
                         )
-
                         # CALCULATE ACTOR LOSS
                         ratio = jnp.exp(log_prob - traj_batch.log_prob)
-                        gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-                        loss_actor1 = ratio * gae
+                        gae_norm = (gae - gae.mean()) / (gae.std() + 1e-8)
+                        loss_actor1 = ratio * gae_norm
                         loss_actor2 = (
                             jnp.clip(
                                 ratio,
                                 1.0 - config["CLIP_EPS"],
                                 1.0 + config["CLIP_EPS"],
                             )
-                            * gae
+                            * gae_norm
                         )
-                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
-                        loss_actor = loss_actor.mean()
+                        loss_actor = -jnp.minimum(loss_actor1, loss_actor2).mean()
                         entropy = pi.entropy().mean()
 
                         total_loss = (
@@ -218,14 +214,23 @@ def make_train(config, env=None, env_params=None):
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        # Additional metrics:
+                        clip_fraction = jnp.mean((ratio < (1.0 - config["CLIP_EPS"])) | (ratio > (1.0 + config["CLIP_EPS"])))
+                        ratio_mean = jnp.mean(ratio)
+                        # Compute explained variance:
+                        explained_var = 1.0 - jnp.var(targets - value) / (jnp.var(targets) + 1e-8)
+                        return total_loss, (value_loss, loss_actor, entropy, clip_fraction, ratio_mean, explained_var)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-                    total_loss, grads = grad_fn(
-                        train_state.params, traj_batch, advantages, targets
+                    (loss_val, aux), grads = grad_fn(train_state.params, traj_batch, advantages, targets)
+                    # Compute gradient norm.
+                    grad_norm = jnp.sqrt(
+                        sum([jnp.sum(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)])
                     )
+                    # Append grad_norm to the auxiliary tuple.
+                    aux = aux + (grad_norm,)
                     train_state = train_state.apply_gradients(grads=grads)
-                    return train_state, total_loss
+                    return train_state, (loss_val, aux)
 
                 train_state, traj_batch, advantages, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
@@ -249,11 +254,12 @@ def make_train(config, env=None, env_params=None):
                     ),
                     shuffled_batch,
                 )
-                train_state, total_loss = jax.lax.scan(
+                train_state, loss_info = jax.lax.scan(
                     _update_minbatch, train_state, minibatches
                 )
                 update_state = (train_state, traj_batch, advantages, targets, rng)
-                return update_state, total_loss
+                return update_state, loss_info
+
             # Updating Training State and Metrics:
             update_state = (train_state, traj_batch, advantages, targets, rng)
             update_state, loss_info = jax.lax.scan(
@@ -262,7 +268,57 @@ def make_train(config, env=None, env_params=None):
             train_state = update_state[0]
             metric = traj_batch.info
             rng = update_state[-1]
-            
+
+            # --- TensorBoard Logging ---
+            if writer is not None:
+                def callback(loss_info, metric, update_count):
+                    # loss_info is a nested tuple from all update epochs and minibatches.
+                    # We unpack the auxiliary metrics as:
+                    #   [0]: value_loss,
+                    #   [1]: actor_loss,
+                    #   [2]: entropy,
+                    #   [3]: clip_fraction,
+                    #   [4]: ratio_mean,
+                    #   [5]: explained_var,
+                    #   [6]: grad_norm.
+                    avg_total_loss = loss_info[0].mean()
+                    avg_value_loss = loss_info[1][0].mean()
+                    avg_actor_loss = loss_info[1][1].mean()
+                    avg_entropy = loss_info[1][2].mean()
+                    avg_clip_fraction = loss_info[1][3].mean()
+                    avg_ratio_mean = loss_info[1][4].mean()
+                    avg_explained_var = loss_info[1][5].mean()
+                    avg_grad_norm = loss_info[1][6].mean()
+
+                    writer.scalar("losses/total_loss", avg_total_loss, update_count)
+                    writer.scalar("losses/value_loss", avg_value_loss, update_count)
+                    writer.scalar("losses/actor_loss", avg_actor_loss, update_count)
+                    writer.scalar("losses/entropy", avg_entropy, update_count)
+                    writer.scalar("losses/clip_fraction", avg_clip_fraction, update_count)
+                    writer.scalar("losses/ratio_mean", avg_ratio_mean, update_count)
+                    writer.scalar("losses/explained_variance", avg_explained_var, update_count)
+                    writer.scalar("grad/grad_norm", avg_grad_norm, update_count)
+                    
+                    # If using an annealed LR, log the current learning rate.
+                    if config.get("ANNEAL_LR"):
+                        current_lr = linear_schedule(update_count)
+                        writer.scalar("lr", current_lr, update_count)
+                    
+                    # Log episodic returns and lengths (and optionally standard deviation of returns).
+                    if (metric is not None and 
+                        metric["returned_episode_returns"].shape[0] > 0 and 
+                        metric["returned_episode_returns"][-1].shape[0] > 0):
+                        returned_episode_returns = metric["returned_episode_returns"][-1]
+                        returned_episode_lengths = metric["returned_episode_lengths"][-1]
+                        if len(returned_episode_returns) > 0:
+                            avg_return = returned_episode_returns.mean()
+                            avg_length = returned_episode_lengths.mean()
+                            std_return = returned_episode_returns.std()
+                            writer.scalar("episodic/avg_return", avg_return, update_count)
+                            writer.scalar("episodic/avg_length", avg_length, update_count)
+                            writer.scalar("episodic/std_return", std_return, update_count)
+                jax.debug.callback(callback, loss_info, metric, update_count)
+
             # Debugging mode
             if config.get("DEBUG"):
                 def callback(info):
@@ -278,32 +334,8 @@ def make_train(config, env=None, env_params=None):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
         runner_state, metric = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+            _update_step, runner_state, jnp.arange(config["NUM_UPDATES"]), config["NUM_UPDATES"]
         )
         return {"runner_state": runner_state, "metrics": metric}
 
     return train
-
-
-if __name__ == "__main__":
-    config = {
-        "LR": 2.5e-4,
-        "NUM_ENVS": 4,
-        "NUM_STEPS": 128,
-        "TOTAL_TIMESTEPS": 5e5,
-        "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 4,
-        "GAMMA": 0.99,
-        "GAE_LAMBDA": 0.95,
-        "CLIP_EPS": 0.2,
-        "ENT_COEF": 0.01,
-        "VF_COEF": 0.5,
-        "MAX_GRAD_NORM": 0.5,
-        "ACTIVATION": "tanh",
-        "ENV_NAME": "CartPole-v1",
-        "ANNEAL_LR": True,
-        "DEBUG": True,
-    }
-    rng = jax.random.PRNGKey(30)
-    train_jit = jax.jit(make_train(config))
-    out = train_jit(rng)

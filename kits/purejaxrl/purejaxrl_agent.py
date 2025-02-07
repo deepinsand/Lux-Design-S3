@@ -12,6 +12,7 @@ from purejaxrl_train import config
 from luxai_s3.params import EnvParams
 from luxai_s3.state import EnvObs
 from luxai_s3.env import LuxAIS3Env
+import time
 
 def load_model_for_inference(rng, network_cls, env, env_params):
 
@@ -43,24 +44,32 @@ class Agent():
      
         # 3. Load the model
 
-
-
+        t0 = time.time()
         rng = jax.random.PRNGKey(0)
         self.rng, rng_reset = jax.random.split(rng)
         self.model, self.model_params = load_model_for_inference(rng_reset, ActorCritic, self.env, self.env_cfg) # Or path to your saved .npz file
+        print(f"model load: {time.time() - t0:.2f} s")
 
         self.env_state = self.env.empty_stateful_env_state()
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
+        t0 = time.time()
+
         env_obs = dacite.from_dict(data_class=EnvObs, data=obs)
+        #print(f"dacite.from_dict: {time.time() - t0:.2f} s")
+
         new_obs, self.env_state = self.env.transform_obs(env_obs, self.env_state, self.env_cfg)
+        #print(f"transform_obs: {time.time() - t0:.2f} s")
+
         self.rng, rng_act = jax.random.split(self.rng)
 
         pi, v = self.model.apply({'params': self.model_params}, new_obs)
         action = pi.sample(seed=rng_act)
+        #print(f"apply_and_sample: {time.time() - t0:.2f} s")
         
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
         actions[:, 0] = np.array(action)
+        #print(f"turn to np: {time.time() - t0:.2f} s")
 
         return actions

@@ -8,3 +8,5 @@ kits/rl/logs
 replay.html
 kits/rl/replay.html
 !kits/rl/logs/**/models
+kits/purejaxrl/models
+kits/purejaxrl/logs

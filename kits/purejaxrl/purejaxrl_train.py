@@ -14,11 +14,13 @@ from packages.purejaxrl.purejaxrl.ppo import make_train
 
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 
+from flax.metrics import tensorboard
+
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 4,
-    "NUM_STEPS": 512,
-    "TOTAL_TIMESTEPS": 5e5,
+    "NUM_ENVS": 128,
+    "NUM_STEPS": 128,
+    "TOTAL_TIMESTEPS": 1_000_000,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 4,
     "GAMMA": 0.99,
@@ -29,7 +31,7 @@ config = {
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
     "ANNEAL_LR": True,
-    "DEBUG": False,
+    "DEBUG": True,
 }
 
 if __name__ == "__main__":
@@ -39,18 +41,29 @@ if __name__ == "__main__":
     rng, rng_init = jax.random.split(rng)
 
     env_params = EnvParams()
-    env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_params)
+    env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
+
     wrapped_env = LuxaiS3GymnaxWrapper(env, "player_0")
 
     rng = jax.random.PRNGKey(42)
     rngs = jax.random.split(rng, 256)
+    
+    log_dir = "logs"
 
+    # Generate a unique subdirectory name using timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_subdir = os.path.join(log_dir, timestamp)
 
-    train_jit = jax.jit(make_train(config, wrapped_env, env_params))
+    os.makedirs(log_subdir, exist_ok=True)
+    summary_writer = tensorboard.SummaryWriter(log_subdir)
+    summary_writer.hparams(dict(config))
+
+    train_jit = jax.jit(make_train(config, summary_writer, wrapped_env, env_params))
     t0 = time.time()
     out = jax.block_until_ready(train_jit(rng))
     print(f"time: {time.time() - t0:.2f} s")
 
+    summary_writer.close()
     save_dir = "models"
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     timestamped_filename = f"model_{timestamp}.pkl"
