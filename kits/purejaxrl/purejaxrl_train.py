@@ -10,7 +10,7 @@ import pickle
 from luxai_s3.params import EnvParams
 from luxai_s3.env import LuxAIS3Env
 from luxai_s3.params import env_params_ranges
-from packages.purejaxrl.purejaxrl.ppo import make_train
+from nn import make_train
 
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 

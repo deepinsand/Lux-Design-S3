@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import flax
 import dacite
-from packages.purejaxrl.purejaxrl.ppo import ActorCritic
+from nn import ActorCritic
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 from purejaxrl_train import config
 
