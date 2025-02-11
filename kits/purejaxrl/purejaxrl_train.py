@@ -10,7 +10,7 @@ import pickle
 from luxai_s3.params import EnvParams
 from luxai_s3.env import LuxAIS3Env
 from luxai_s3.params import env_params_ranges
-from nn import make_train
+from purejaxrl_ppo_rnn import make_train
 
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 
@@ -18,11 +18,11 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 128,
+    "NUM_ENVS": 64,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 1_000_000,
+    "TOTAL_TIMESTEPS": 4_000,
     "UPDATE_EPOCHS": 4,
-    "NUM_MINIBATCHES": 4,
+    "NUM_MINIBATCHES": 4, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
@@ -31,7 +31,7 @@ config = {
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
     "ANNEAL_LR": True,
-    "DEBUG": True,
+    "DEBUG": False,
 }
 
 if __name__ == "__main__":
