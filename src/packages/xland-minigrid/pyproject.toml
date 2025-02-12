@@ -1,0 +1,106 @@
+[project]
+name = "xminigrid"
+description = "JAX-accelerated meta-reinforcement learning environments inspired by XLand and MiniGrid"
+readme = "README.md"
+requires-python =">=3.9"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Alexander Nikulin", email = "a.p.nikulin@tinkoff.ai"},
+]
+dynamic = ["version"]
+
+keywords = [
+    "jax",
+    "neural-networks",
+    "deep-learning",
+    "reinforcement learning",
+    "meta reinforcement learning",
+    "gridworld",
+    "minigrid",
+    "xland",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+dependencies = [
+    "jax>=0.4.27",
+    "jaxlib>=0.4.27",
+    "flax>=0.8.0",
+    "rich>=13.4.2",
+    "chex>=0.1.85",
+    "imageio>=2.31.2",
+    "imageio-ffmpeg>=0.4.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.6",
+    "pre-commit>=3.3.3",
+    "pyright>=1.1.347",
+]
+
+baselines = [
+    "matplotlib>=3.7.2",
+    "wandb>=0.15.10",
+    "pyrallis>=0.3.1",
+    "distrax>=0.1.4",
+    "optax>=0.1.5",
+    "orbax>=0.1.9",
+    "tqdm>=4.66.4",
+]
+
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "xminigrid.__version__"}
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["examples/*.ipynb"]
+
+[tool.ruff.lint]
+# disabling rules conflicting with the formatter (from the docs)
+select = ["E", "F", "I001", "RUF100"]
+# TODO: remove F401 from ignored later
+ignore = [
+    "W191", "E111", "E114",
+    "E117", "D206", "D300",
+    "Q000", "Q001", "Q002",
+    "Q003", "COM812", "COM819",
+    "ISC001", "ISC002", "F401"
+]
+
+[tool.ruff.format]
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint.isort]
+# see https://github.com/astral-sh/ruff/issues/8571
+known-third-party = ["wandb"]
+
+[tool.pyright]
+include = ["src/xminigrid"]
+exclude = [
+    'training',
+    "**/node_modules",
+    "**/__pycache__",
+]
+reportMissingImports = "none"
+reportMissingTypeStubs = false
+reportMissingModuleSource = false
+
+pythonVersion = "3.10"
+pythonPlatform = "All"
