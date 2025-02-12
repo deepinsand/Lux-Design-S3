@@ -26,20 +26,21 @@ class ScannedRNN(nn.Module):
     def __call__(self, carry, x):
         """Applies the module."""
         rnn_state = carry
-        ins, resets = x
+        ins, resets = x 
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
-        new_rnn_state, y = nn.GRUCell()(rnn_state, ins)
+        hidden_size = rnn_state[0].shape[0]
+        new_rnn_state, y = nn.GRUCell(features=hidden_size)(rnn_state, ins)
         return new_rnn_state, y
 
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
         # Use a dummy key since the default state init fn is just zeros.
-        return nn.GRUCell.initialize_carry(
-            jax.random.PRNGKey(0), (batch_size,), hidden_size
+        return nn.GRUCell(features=hidden_size).initialize_carry(
+            jax.random.PRNGKey(0), (batch_size, hidden_size)
         )
 
 
@@ -262,6 +263,7 @@ def make_train(config):
                     lambda x: jnp.take(x, permutation, axis=1), batch
                 )
 
+                # num_envs has to be a multiple of num_minibatches
                 minibatches = jax.tree_util.tree_map(
                     lambda x: jnp.swapaxes(
                         jnp.reshape(
