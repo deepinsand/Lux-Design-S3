@@ -18,11 +18,11 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 64,
-    "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 4_000,
-    "UPDATE_EPOCHS": 4,
-    "NUM_MINIBATCHES": 4, # must be less than num_envs since RNN shuffles environemnts
+    "NUM_ENVS": 1,
+    "NUM_STEPS": 8,
+    "TOTAL_TIMESTEPS": 1024,
+    "UPDATE_EPOCHS": 1,
+    "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
@@ -31,7 +31,7 @@ config = {
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
     "ANNEAL_LR": True,
-    "DEBUG": False,
+    "DEBUG": True,
 }
 
 if __name__ == "__main__":
@@ -58,10 +58,16 @@ if __name__ == "__main__":
     summary_writer = tensorboard.SummaryWriter(log_subdir)
     summary_writer.hparams(dict(config))
 
+    if config["DEBUG"]:
+        jax.profiler.start_trace(log_subdir)
+    
     train_jit = jax.jit(make_train(config, summary_writer, wrapped_env, env_params))
     t0 = time.time()
     out = jax.block_until_ready(train_jit(rng))
     print(f"time: {time.time() - t0:.2f} s")
+
+    if config["DEBUG"]:
+        jax.profiler.stop_trace()
 
     summary_writer.close()
     save_dir = "models"
