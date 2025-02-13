@@ -18,7 +18,7 @@ import pyrallis
 import flax
 from flax.jax_utils import replicate, unreplicate
 from flax.training.train_state import TrainState
-from utils import Transition, calculate_gae, ppo_update_networks, rollout
+from xland_util import Transition, calculate_gae, ppo_update_networks, rollout
 
 from xminigrid.environment import Environment, EnvParams
 from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_pmap

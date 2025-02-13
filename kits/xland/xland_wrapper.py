@@ -7,7 +7,6 @@ from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 
-from xland_util import MultiDiscrete
 from luxai_s3.params import EnvParams
 from luxai_s3.state import (
     ASTEROID_TILE,
@@ -21,6 +20,31 @@ from luxai_s3.state import (
 )
 
 from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap
+
+
+class MultiDiscrete:
+    """A minimal jittable MultiDiscrete space for Gymnax."""
+
+    def __init__(self, nvec, n):
+        # Convert to a JAX array (if not already)
+        self.nvec = jnp.array(nvec, dtype=jnp.int_)
+        self.shape = self.nvec.shape
+        self.n = n
+        self.dtype = jnp.int_
+
+    def sample(self, rng: chex.PRNGKey) -> chex.Array:
+        flat_nvec = self.nvec.flatten()
+        num_elements = flat_nvec.shape[0]
+        # Split the RNG for each element
+        keys = jax.random.split(rng, num_elements)
+        # Use vmap to sample for each discrete space in a vectorized way.
+        sample_fn = jax.vmap(lambda key, n: jax.random.randint(key, shape=(), minval=0, maxval=n))
+        samples_flat = sample_fn(keys, flat_nvec)
+        return samples_flat.reshape(self.shape)
+
+    def contains(self, x: chex.Array) -> jnp.ndarray:
+        # Check that all entries are within their respective bounds.
+        return jnp.all((x >= 0) & (x < self.nvec))
 
     
 class GymnaxWrapper(object):
@@ -140,7 +164,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         
         return unit_counts_map
     
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params):
         observed_relic_node_positions = jnp.array(obs.relic_nodes) # shape (max_relic_nodes, 2)
         observed_relic_nodes_mask = jnp.array(obs.relic_nodes_mask) # shape (max_relic_nodes, )
@@ -158,8 +182,6 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         unit_counts_player_0 = self.compute_counts_map(unit_positions, unit_mask) / float(self.fixed_env_params.max_units)
         norm_last_diff_player_0_points = self.extract_differece_points_player_0(obs, state) / self.fixed_env_params.max_units
-
-
 
 
         new_observation = WrappedEnvObs(
