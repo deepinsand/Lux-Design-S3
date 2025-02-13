@@ -20,9 +20,8 @@ from flax.jax_utils import replicate, unreplicate
 from flax.training.train_state import TrainState
 from utils import Transition, calculate_gae, ppo_update_networks, rollout
 
-import xminigrid
 from xminigrid.environment import Environment, EnvParams
-from xminigrid.wrappers import DirectionObservationWrapper, GymAutoResetWrapper
+from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_pmap
 
 from nn import ActorCriticRNN
 # must come after import nn since that import distrax, which will require keras if this is imported first
@@ -36,18 +35,16 @@ from luxai_s3.params import EnvParams
 from luxai_s3.env import LuxAIS3Env
 from luxai_s3.params import env_params_ranges
 
-from xland_wrapper import LuxaiS3GymnaxWrapper
+from xland_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
+from luxai_s3.state import (
+    EnvObs,
+    MapTile,
+    UnitState,
+)
 
 
 @dataclass
 class TrainConfig:
-    project: str = "xminigrid"
-    group: str = "default"
-    name: str = "single-task-ppo"
-    env_id: str = "MiniGrid-Empty-6x6"
-    benchmark_id: Optional[str] = None
-    ruleset_id: Optional[int] = None
-    img_obs: bool = False
     # agent
     obs_emb_dim: int = 16
     action_emb_dim: int = 16
@@ -56,11 +53,11 @@ class TrainConfig:
     head_hidden_dim: int = 256
     # training
     enable_bf16: bool = False
-    num_envs: int = 2
-    num_steps: int = 16
+    num_envs: int = 64
+    num_steps: int = 128
     update_epochs: int = 1
     num_minibatches: int = 2
-    total_timesteps: int = 1000
+    total_timesteps: int = 1_000_000
     lr: float = 0.001
     clip_eps: float = 0.2
     gamma: float = 0.99
@@ -89,34 +86,52 @@ def make_states(config: TrainConfig):
         return config.lr * frac
 
     # setup environment
-    env, env_params = xminigrid.make(config.env_id)
-    env = GymAutoResetWrapper(env)
-    env = DirectionObservationWrapper(env)
 
+    env_params = EnvParams()
+    env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
+    env = LuxaiS3GymnaxWrapper(env, "player_0")
+    
     # setup training state
     rng = jax.random.key(config.seed)
     rng, _rng = jax.random.split(rng)
 
+        
+    action_space = env.action_space(env_params)
+
     network = ActorCriticRNN(
-        num_actions=env.num_actions(env_params),
-        obs_emb_dim=config.obs_emb_dim,
-        action_emb_dim=config.action_emb_dim,
+        action_dim=[action_space.shape[0], action_space.n],
         rnn_hidden_dim=config.rnn_hidden_dim,
         rnn_num_layers=config.rnn_num_layers,
         head_hidden_dim=config.head_hidden_dim,
-        img_obs=config.img_obs,
         dtype=jnp.bfloat16 if config.enable_bf16 else None,
     )
 
-    # [batch_size, seq_len, ...]
-    shapes = env.observation_shape(env_params)
-
-    init_obs = {
-        "obs_img": jnp.zeros((config.num_envs_per_device, 1, *shapes["img"])),
-        "obs_dir": jnp.zeros((config.num_envs_per_device, 1, shapes["direction"])),
-        "prev_action": jnp.zeros((config.num_envs_per_device, 1), dtype=jnp.int32),
-        "prev_reward": jnp.zeros((config.num_envs_per_device, 1)),
-    }
+    def fill_zeroes(shape, dtype=jnp.int16):
+        return jnp.zeros((config.num_envs_per_device, 1, *shape), dtype=dtype)
+    
+    init_obs = WrappedEnvObs(
+        original_obs=EnvObs(
+            units=UnitState(
+                position=fill_zeroes((env_params.num_teams, env_params.max_units, 2)),
+                energy=fill_zeroes((env_params.num_teams, env_params.max_units), dtype=jnp.float32),
+            ),
+            units_mask=fill_zeroes((env_params.num_teams, env_params.max_units)),
+            sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height)),
+            map_features=MapTile(
+                energy=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+                tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
+            ),
+            team_points=fill_zeroes((env_params.num_teams,)),
+            team_wins=fill_zeroes((env_params.num_teams,)),
+            steps=fill_zeroes(()),
+            match_steps=fill_zeroes(()),
+            relic_nodes=fill_zeroes((env_params.max_relic_nodes,2)),
+            relic_nodes_mask=fill_zeroes((env_params.max_relic_nodes,)),
+        ),
+        discovered_relic_node_positions=fill_zeroes((env_params.max_relic_nodes,2)),
+        discovered_relic_nodes_mask=fill_zeroes((env_params.max_relic_nodes,)),
+        normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32)
+    )
     init_hstate = network.initialize_carry(batch_size=config.num_envs_per_device)
 
     network_params = network.init(_rng, init_obs, init_hstate)
@@ -135,7 +150,8 @@ def make_train(
     config: TrainConfig,
     writer: SummaryWriter
 ):
-    @partial(jax.pmap, axis_name="devices")
+    
+    #@partial(debuggable_pmap, axis_name="devices")
     def train(
         rng: jax.Array,
         train_state: TrainState,
@@ -145,9 +161,10 @@ def make_train(
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config.num_envs_per_device)
 
-        timestep = jax.vmap(env.reset, in_axes=(None, 0))(env_params, reset_rng)
-        prev_action = jnp.zeros(config.num_envs_per_device, dtype=jnp.int32)
-        prev_reward = jnp.zeros(config.num_envs_per_device)
+        action_dim = env.action_space(env_params)
+        reset_obs, reset_env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
+        prev_action = jnp.zeros((config.num_envs_per_device, action_dim.shape[0]), dtype=jnp.int32)
+        prev_reward = jnp.zeros(config.num_envs_per_device, dtype=jnp.int32) # env uses int rewards for now until normalization?
 
         # TRAIN LOOP
         def _update_step(runner_state, step_count):
@@ -155,17 +172,16 @@ def make_train(
             def _env_step(runner_state, _):
                 rng, train_state, prev_timestep, prev_action, prev_reward, prev_hstate = runner_state
 
+                # prev reward is already unrolled from runner_state.  These should be the same in theory ...
+                prev_obs, prev_env_state, _ = prev_timestep
+                # Add the seq_len dimension?
+                prev_obs_with_new_axis = jax.tree_util.tree_map(lambda x: x[:, None], prev_obs)
+
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
                 dist, value, hstate = train_state.apply_fn(
                     train_state.params,
-                    {
-                        # [batch_size, seq_len=1, ...]
-                        "obs_img": prev_timestep.observation["img"][:, None],
-                        "obs_dir": prev_timestep.observation["direction"][:, None],
-                        "prev_action": prev_action[:, None],
-                        "prev_reward": prev_reward[:, None],
-                    },
+                    prev_obs_with_new_axis, 
                     prev_hstate,
                 )
                 action, log_prob = dist.sample_and_log_prob(seed=_rng)
@@ -173,19 +189,23 @@ def make_train(
                 action, value, log_prob = action.squeeze(1), value.squeeze(1), log_prob.squeeze(1)
 
                 # STEP ENV
-                timestep = jax.vmap(env.step, in_axes=(None, 0, 0))(env_params, prev_timestep, action)
+                rng, _rng = jax.random.split(rng)
+                rng_step = jax.random.split(_rng, action.shape[0])
+                obs, env_state, reward, done, _ = debuggable_vmap(env.step, in_axes=(0, 0, 0, None))(rng_step, prev_env_state, action, env_params)
+
+                timestep = (obs, env_state, reward)
+
                 transition = Transition(
-                    done=timestep.last(),
+                    done=done,
                     action=action,
                     value=value,
-                    reward=timestep.reward,
+                    reward=reward,
                     log_prob=log_prob,
-                    obs=prev_timestep.observation["img"],
-                    dir=prev_timestep.observation["direction"],
+                    obs=obs,
                     prev_action=prev_action,
                     prev_reward=prev_reward,
                 )
-                runner_state = (rng, train_state, timestep, action, timestep.reward, hstate)
+                runner_state = (rng, train_state, timestep, action, reward, hstate)
                 return runner_state, transition
 
             initial_hstate = runner_state[-1]
@@ -195,14 +215,14 @@ def make_train(
             # CALCULATE ADVANTAGE
             rng, train_state, timestep, prev_action, prev_reward, hstate = runner_state
             # calculate value of the last step for bootstrapping
+
+            last_obs, _, _ = timestep
+            # Add the seq_len dimension?
+            last_obs_with_new_axis = jax.tree_util.tree_map(lambda x: x[:, None], last_obs)
+            
             _, last_val, _ = train_state.apply_fn(
                 train_state.params,
-                {
-                    "obs_img": timestep.observation["img"][:, None],
-                    "obs_dir": timestep.observation["direction"][:, None],
-                    "prev_action": prev_action[:, None],
-                    "prev_reward": prev_reward[:, None],
-                },
+                last_obs_with_new_axis,
                 hstate,
             )
             advantages, targets = calculate_gae(transitions, last_val.squeeze(1), config.gamma, config.gae_lambda)
@@ -257,7 +277,7 @@ def make_train(
             eval_rng = jax.random.split(_rng, num=config.eval_episodes_per_device)
 
             # vmap only on rngs
-            eval_stats = jax.vmap(rollout, in_axes=(0, None, None, None, None, None))(
+            eval_stats = debuggable_vmap(rollout, in_axes=(0, None, None, None, None, None))(
                 eval_rng,
                 env,
                 env_params,
@@ -266,7 +286,7 @@ def make_train(
                 jnp.zeros((1, config.rnn_num_layers, config.rnn_hidden_dim)),
                 1,
             )
-            eval_stats = jax.lax.pmean(eval_stats, axis_name="devices")
+            #eval_stats = jax.lax.pmean(eval_stats, axis_name="devices")
             loss_info.update(
                 {
                     "eval/returns": eval_stats.reward.mean(0),
@@ -276,16 +296,17 @@ def make_train(
             )
 
             if writer is not None:
-                def callback(loss_info, eval_stats, step_count):
+                def callback(loss_info, step_count):
                     for key in ["total_loss", "value_loss", "actor_loss", "entropy", "eval/returns", "eval/lengths", "lr"]:
                         writer.scalar(key, loss_info[key], step_count)
-                jax.debug.callback(callback, loss_info, eval_stats, step_count)
+                jax.debug.callback(callback, loss_info, step_count)
 
 
             runner_state = (rng, train_state, timestep, prev_action, prev_reward, hstate)
             return runner_state, loss_info
 
-        runner_state = (rng, train_state, timestep, prev_action, prev_reward, init_hstate)
+        reset_timestep = (reset_obs, reset_env_state, prev_reward)
+        runner_state = (rng, train_state, reset_timestep, prev_action, prev_reward, init_hstate)
         step_counts = jnp.arange(config.num_updates)
         runner_state, loss_info = jax.lax.scan(_update_step, runner_state, step_counts, config.num_updates)
         return {"runner_state": runner_state, "loss_info": loss_info}
@@ -311,13 +332,13 @@ def train(config: TrainConfig):
 
     rng, env, env_params, init_hstate, train_state = make_states(config)
     # replicating args across devices
-    rng = jax.random.split(rng, num=jax.local_device_count())
-    train_state = replicate(train_state, jax.local_devices())
-    init_hstate = replicate(init_hstate, jax.local_devices())
+    # rng = jax.random.split(rng, num=jax.local_device_count())
+    # train_state = replicate(train_state, jax.local_devices())
+    # init_hstate = replicate(init_hstate, jax.local_devices())
 
     print("Compiling...")
     t = time.time()
-    train_fn = make_train(env, env_params, config, summary_writer)
+    train_fn = jax.jit(make_train(env, env_params, config, summary_writer))
     
     if os.environ.get("JAX_DISABLE_JIT", "").lower() != "true":
         train_fn = train_fn.lower(rng, train_state, init_hstate).compile()
@@ -331,7 +352,7 @@ def train(config: TrainConfig):
     print(f"Done in {elapsed_time:.2f}s")
 
     print("Logging...")
-    loss_info = unreplicate(train_info["loss_info"])
+    loss_info = train_info["loss_info"]#unreplicate(train_info["loss_info"])
 
     total_transitions = 0
     for i in range(config.num_updates):

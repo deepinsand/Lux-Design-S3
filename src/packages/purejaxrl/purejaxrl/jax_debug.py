@@ -14,7 +14,13 @@ def debuggable_conditional_breakpoint(pred):
     if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
         jax.lax.cond(pred, lambda: breakpoint(), lambda *args: None)
 
-        
+
+def debuggable_pmap(fun, axis_name):
+    if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
+        return loop_based_vmap_replacement(func, in_axes=in_axes, out_axes=out_axes)
+    else:
+        return jax.pmap(func, in_axes=in_axes, out_axes=out_axes)
+            
 def debuggable_vmap(func, in_axes=0, out_axes=0):
     """
     Conditionally returns either jax.vmap or loop_based_vmap_replacement

@@ -3,8 +3,9 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 from flax.training.train_state import TrainState
-
-from xminigrid.environment import Environment, EnvParams
+from xland_wrapper import WrappedEnvObs
+from luxai_s3.params import EnvParams
+from gymnax.environments import environment, spaces
 
 
 # Training stuff
@@ -15,8 +16,7 @@ class Transition(struct.PyTreeNode):
     reward: jax.Array
     log_prob: jax.Array
     # for obs
-    obs: jax.Array
-    dir: jax.Array
+    obs: WrappedEnvObs
     # for rnn policy
     prev_action: jax.Array
     prev_reward: jax.Array
@@ -62,13 +62,7 @@ def ppo_update_networks(
         # RERUN NETWORK
         dist, value, _ = train_state.apply_fn(
             params,
-            {
-                # [batch_size, seq_len, ...]
-                "obs_img": transitions.obs,
-                "obs_dir": transitions.dir,
-                "prev_action": transitions.prev_action,
-                "prev_reward": transitions.prev_reward,
-            },
+            transitions.obs,
             init_hstate,
         )
         log_prob = dist.log_prob(transitions.action)
@@ -93,7 +87,7 @@ def ppo_update_networks(
         return total_loss, (value_loss, actor_loss, entropy)
 
     (loss, (vloss, aloss, entropy)), grads = jax.value_and_grad(_loss_fn, has_aux=True)(train_state.params)
-    (loss, vloss, aloss, entropy, grads) = jax.lax.pmean((loss, vloss, aloss, entropy, grads), axis_name="devices")
+    #(loss, vloss, aloss, entropy, grads) = jax.lax.pmean((loss, vloss, aloss, entropy, grads), axis_name="devices")
     train_state = train_state.apply_gradients(grads=grads)
     update_info = {
         "total_loss": loss,
@@ -114,7 +108,7 @@ class RolloutStats(struct.PyTreeNode):
 
 def rollout(
     rng: jax.Array,
-    env: Environment,
+    env: environment.Environment,
     env_params: EnvParams,
     train_state: TrainState,
     init_hstate: jax.Array,
@@ -125,34 +119,38 @@ def rollout(
         return jnp.less(stats.episodes, num_consecutive_episodes)
 
     def _body_fn(carry):
-        rng, stats, timestep, prev_action, prev_reward, hstate = carry
+        rng, stats, prev_timestep, prev_action, prev_reward, hstate = carry
+
+        prev_obs, prev_env_state, _ = prev_timestep
+        # Add the seq_len dimension?
+        prev_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, None, ...], prev_obs)
 
         rng, _rng = jax.random.split(rng)
         dist, _, hstate = train_state.apply_fn(
             train_state.params,
-            {
-                "obs_img": timestep.observation["img"][None, None, ...],
-                "obs_dir": timestep.observation["direction"][None, None, ...],
-                "prev_action": prev_action[None, None, ...],
-                "prev_reward": prev_reward[None, None, ...],
-            },
+            prev_obs_with_new_axis,
             hstate,
         )
         action = dist.sample(seed=_rng).squeeze()
-        timestep = env.step(env_params, timestep, action)
+        rng, _rng = jax.random.split(rng)
+
+        obs, env_state, reward, done, _  = env.step(_rng, prev_env_state, action, env_params)
 
         stats = stats.replace(
-            reward=stats.reward + timestep.reward,
+            reward=stats.reward + reward,
             length=stats.length + 1,
-            episodes=stats.episodes + timestep.last(),
+            episodes=stats.episodes + done,
         )
-        carry = (rng, stats, timestep, action, timestep.reward, hstate)
+        timestep = (obs, env_state, reward)
+        carry = (rng, stats, timestep, action, reward, hstate)
         return carry
 
-    timestep = env.reset(env_params, rng)
-    prev_action = jnp.asarray(0)
-    prev_reward = jnp.asarray(0)
-    init_carry = (rng, RolloutStats(), timestep, prev_action, prev_reward, init_hstate)
+    reset_obs, reset_env_state = env.reset(rng, env_params)
+    action_dim = env.action_space(env_params)
+    prev_action = jnp.zeros(action_dim.shape[0], dtype=jnp.int32)
+    prev_reward = jnp.asarray(0, dtype=jnp.int32)
+    reset_timestep = (reset_obs, reset_env_state, prev_reward)
+    init_carry = (rng, RolloutStats(), reset_timestep, prev_action, prev_reward, init_hstate)
 
     final_carry = jax.lax.while_loop(_cond_fn, _body_fn, init_val=init_carry)
     return final_carry[1]
