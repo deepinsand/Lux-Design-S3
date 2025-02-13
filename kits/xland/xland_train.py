@@ -53,11 +53,11 @@ class TrainConfig:
     head_hidden_dim: int = 256
     # training
     enable_bf16: bool = False
-    num_envs: int = 64
+    num_envs: int = 8
     num_steps: int = 128
-    update_epochs: int = 1
+    update_epochs: int = 2
     num_minibatches: int = 2
-    total_timesteps: int = 1_000_000
+    total_timesteps: int = 500_000
     lr: float = 0.001
     clip_eps: float = 0.2
     gamma: float = 0.99
@@ -67,6 +67,7 @@ class TrainConfig:
     max_grad_norm: float = 0.5
     eval_episodes: int = 80
     seed: int = 42
+    profile: bool = False
 
     def __post_init__(self):
         num_devices = jax.local_device_count()
@@ -110,28 +111,14 @@ def make_states(config: TrainConfig):
         return jnp.zeros((config.num_envs_per_device, 1, *shape), dtype=dtype)
     
     init_obs = WrappedEnvObs(
-        original_obs=EnvObs(
-            units=UnitState(
-                position=fill_zeroes((env_params.num_teams, env_params.max_units, 2)),
-                energy=fill_zeroes((env_params.num_teams, env_params.max_units), dtype=jnp.float32),
-            ),
-            units_mask=fill_zeroes((env_params.num_teams, env_params.max_units)),
-            sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height)),
-            map_features=MapTile(
-                energy=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-                tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
-            ),
-            team_points=fill_zeroes((env_params.num_teams,)),
-            team_wins=fill_zeroes((env_params.num_teams,)),
-            steps=fill_zeroes(()),
-            match_steps=fill_zeroes(()),
-            relic_nodes=fill_zeroes((env_params.max_relic_nodes,2)),
-            relic_nodes_mask=fill_zeroes((env_params.max_relic_nodes,)),
-        ),
-        discovered_relic_node_positions=fill_zeroes((env_params.max_relic_nodes,2)),
-        discovered_relic_nodes_mask=fill_zeroes((env_params.max_relic_nodes,)),
-        normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32)
+        relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
+        unit_counts_player_0=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
+        normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32),
+        unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
+        unit_mask_player_0=fill_zeroes((env_params.max_units,)),
     )
+
     init_hstate = network.initialize_carry(batch_size=config.num_envs_per_device)
 
     network_params = network.init(_rng, init_obs, init_hstate)
@@ -347,10 +334,17 @@ def train(config: TrainConfig):
 
     print("Training...")
     t = time.time()
+
+    if config.profile:
+        jax.profiler.start_trace(log_subdir)
+
     train_info = jax.block_until_ready(train_fn(rng, train_state, init_hstate))
     elapsed_time = time.time() - t
     print(f"Done in {elapsed_time:.2f}s")
 
+    if config.profile:
+        jax.profiler.stop_trace()
+    
     print("Logging...")
     loss_info = train_info["loss_info"]#unreplicate(train_info["loss_info"])
 
