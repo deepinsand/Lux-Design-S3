@@ -131,7 +131,7 @@ def rollout(
             prev_obs_with_new_axis,
             hstate,
         )
-        action = dist.sample(seed=_rng).squeeze()
+        action = dist.sample(seed=_rng).squeeze((0,1)) # get rid of env and mb dimensions
         rng, _rng = jax.random.split(rng)
 
         obs, env_state, reward, done, _  = env.step(_rng, prev_env_state, action, env_params)
@@ -148,7 +148,7 @@ def rollout(
     reset_obs, reset_env_state = env.reset(rng, env_params)
     action_dim = env.action_space(env_params)
     prev_action = jnp.zeros(action_dim.shape[0], dtype=jnp.int32)
-    prev_reward = jnp.asarray(0, dtype=jnp.int32)
+    prev_reward = jnp.asarray(0, dtype=jnp.float32)
     reset_timestep = (reset_obs, reset_env_state, prev_reward)
     init_carry = (rng, RolloutStats(), reset_timestep, prev_action, prev_reward, init_hstate)
 

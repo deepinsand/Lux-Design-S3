@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 import flax
 import dacite
-from purejaxrl_ppo_rnn import ActorCriticRNN, ScannedRNN
-from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
+from purejaxrl_ppo import ActorCritic
+from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
 from purejaxrl_train import config
 
 from luxai_s3.params import EnvParams
@@ -21,25 +21,27 @@ def load_model_for_inference(rng, network_cls, env, env_params):
 
     action_space = env.action_space(env_params)
     network = network_cls(
-        [action_space.shape[0], action_space.n], config=config
+        [action_space.shape[0], action_space.n]
     )
-    init_x = (
-        jnp.zeros(
-            (1, 1, * env.observation_space(env_params).shape)
-        ),
-        jnp.zeros((1, 1)),
-    )
-    init_hstate = ScannedRNN.initialize_carry(1, 128)
 
-    network_params = network.init(rng, init_hstate, init_x)
+    def fill_zeroes(shape, dtype=jnp.int16):
+        return jnp.zeros((1, *shape), dtype=dtype)
+    
+    init_obs = WrappedEnvObs(
+        relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
+        unit_counts_player_0=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
+        normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32),
+        unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
+        unit_mask_player_0=fill_zeroes((env_params.max_units,)),
+    )
+
+    network_params = network.init(rng, init_obs)
 
     loaded_params = flax.serialization.from_state_dict(network_params['params'], loaded_params['params'])
 
 
-    return network, loaded_params, init_hstate
-
-
-
+    return network, loaded_params
 
 class Agent():
 
@@ -54,7 +56,7 @@ class Agent():
         t0 = time.time()
         rng = jax.random.PRNGKey(0)
         self.rng, rng_reset = jax.random.split(rng)
-        self.model, self.model_params, self.hstate = load_model_for_inference(rng_reset, ActorCriticRNN, self.env, self.env_cfg) # Or path to your saved .npz file
+        self.model, self.model_params= load_model_for_inference(rng_reset, ActorCritic, self.env, self.env_cfg) # Or path to your saved .npz file
         print(f"model load: {time.time() - t0:.2f} s")
 
         self.env_state = self.env.empty_stateful_env_state()
@@ -71,8 +73,9 @@ class Agent():
 
         self.rng, rng_act = jax.random.split(self.rng)
 
-        ac_in = (new_obs[np.newaxis, np.newaxis, :], jnp.array([[False]]))
-        self.hstate, pi, v = self.model.apply({'params': self.model_params}, self.hstate, ac_in)
+        new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
+
+        pi, v = self.model.apply({'params': self.model_params}, new_obs_with_new_axis)
         action = pi.sample(seed=rng_act)
         #print(f"apply_and_sample: {time.time() - t0:.2f} s")
         

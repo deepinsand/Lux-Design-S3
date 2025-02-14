@@ -35,7 +35,7 @@ from luxai_s3.params import EnvParams
 from luxai_s3.env import LuxAIS3Env
 from luxai_s3.params import env_params_ranges
 
-from xland_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
+from xland_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs, NormalizeVecReward
 from luxai_s3.state import (
     EnvObs,
     MapTile,
@@ -47,18 +47,17 @@ from luxai_s3.state import (
 class TrainConfig:
     # agent
     obs_emb_dim: int = 16
-    action_emb_dim: int = 16
     rnn_hidden_dim: int = 1024
     rnn_num_layers: int = 1
-    head_hidden_dim: int = 256
+    head_hidden_dim: int = 64
     # training
     enable_bf16: bool = False
     num_envs: int = 8
     num_steps: int = 128
     update_epochs: int = 2
     num_minibatches: int = 2
-    total_timesteps: int = 500_000
-    lr: float = 0.001
+    total_timesteps: int = 200_000
+    lr: float = 2.5e-4
     clip_eps: float = 0.2
     gamma: float = 0.99
     gae_lambda: float = 0.95
@@ -91,7 +90,7 @@ def make_states(config: TrainConfig):
     env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
     env = LuxaiS3GymnaxWrapper(env, "player_0")
-    
+    env = NormalizeVecReward(env, config.gamma)
     # setup training state
     rng = jax.random.key(config.seed)
     rng, _rng = jax.random.split(rng)
@@ -151,7 +150,7 @@ def make_train(
         action_dim = env.action_space(env_params)
         reset_obs, reset_env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
         prev_action = jnp.zeros((config.num_envs_per_device, action_dim.shape[0]), dtype=jnp.int32)
-        prev_reward = jnp.zeros(config.num_envs_per_device, dtype=jnp.int32) # env uses int rewards for now until normalization?
+        prev_reward = jnp.zeros(config.num_envs_per_device, dtype=jnp.float32) 
 
         # TRAIN LOOP
         def _update_step(runner_state, step_count):

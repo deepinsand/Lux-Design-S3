@@ -9,7 +9,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from flax.linen.dtypes import promote_dtype
-from flax.linen.initializers import glorot_normal, orthogonal, zeros_init
+from flax.linen.initializers import glorot_normal, orthogonal, zeros_init, constant
 from flax.typing import Dtype
 
 from xland_wrapper import WrappedEnvObs
@@ -149,7 +149,7 @@ class SpatialFeatureExtractor(nn.Module):
                 row, col = pos  # extract row and col indices
                 feat = fmap[row, col, :]  # extract feature vector at that spatial location
                 # If the agent doesn't exist (valid == False), return zeros.
-                return feat#jnp.where(valid, feat, jnp.zeros_like(feat))
+                return jnp.where(valid, feat, jnp.zeros_like(feat))
             # Vectorize over the num_agents dimension.
             return debuggable_vmap(extract_feature)(positions, mask_t)
         
@@ -169,7 +169,7 @@ class ActorCriticRNN(nn.Module):
     head_hidden_dim: int = 64
     dtype: Optional[Dtype] = None
     param_dtype: Dtype = jnp.float32
-    features_dim = 16
+    features_dim = 8
 
     @nn.compact
     # doesn't get done calls, how does it reset memory?
@@ -194,27 +194,37 @@ class ActorCriticRNN(nn.Module):
             ]
         )
 
-        rnn_core = BatchedRNNModel(
-            self.rnn_hidden_dim, self.rnn_num_layers, dtype=self.dtype, param_dtype=self.param_dtype
-        )
+        # rnn_core = BatchedRNNModel(
+        #     self.rnn_hidden_dim, self.rnn_num_layers, dtype=self.dtype, param_dtype=self.param_dtype
+        # )
         actor = nn.Sequential(
             [
                 nn.Dense(
-                    self.head_hidden_dim, kernel_init=orthogonal(2), dtype=self.dtype, param_dtype=self.param_dtype
+                    self.head_hidden_dim, kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0)
                 ),
                 nn.tanh,
                 nn.Dense(
-                    math.prod(self.action_dim), kernel_init=orthogonal(0.01), dtype=self.dtype, param_dtype=self.param_dtype
+                    self.head_hidden_dim, kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0)
+                ),
+                nn.tanh,
+                nn.Dense(
+                    self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
                 ),
             ]
         )
         critic = nn.Sequential(
             [
                 nn.Dense(
-                    self.head_hidden_dim, kernel_init=orthogonal(2), dtype=self.dtype, param_dtype=self.param_dtype
+                    self.head_hidden_dim, kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0)
                 ),
                 nn.tanh,
-                nn.Dense(1, kernel_init=orthogonal(1.0), dtype=self.dtype, param_dtype=self.param_dtype),
+                nn.Dense(
+                    self.head_hidden_dim, kernel_init=orthogonal(jnp.sqrt(2)), bias_init=constant(0.0)
+                ),
+                nn.tanh,
+                nn.Dense(
+                    1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)
+                ),
             ]
         )
 
@@ -222,27 +232,35 @@ class ActorCriticRNN(nn.Module):
         obs_emb = grid_encoder(obs)
 
         local_features = SpatialFeatureExtractor()(obs_emb, obs.unit_positions_player_0, obs.unit_mask_player_0)  # [b x s x num_agents, features]
-        local_features = local_features.reshape(local_features.shape[:-2] + (-1,)) # flatten num_agents and features
+        local_features = jnp.concatenate(
+            [
+                local_features,
+                obs.unit_mask_player_0[..., jnp.newaxis]
+            ],
+            axis=-1, # Add the mask to understand if the agent is actually there
+        )
+        value_input = local_features.reshape(local_features.shape[:-2] + (-1,)) # flatten num_agents and features
 
         # [batch_size, seq_len, hidden_dim + 2 * act_emb_dim + 1]
         #out = jnp.concatenate([obs_emb, dir_emb, act_emb, inputs["prev_reward"][..., None]], axis=-1)
 
         # core networks
-        out, new_hidden = rnn_core(local_features, hidden)
+        # out, new_hidden = rnn_core(local_features, hidden)
+        #out = local_features
 
         # casting to full precision for the loss, as softmax/log_softmax
         # (inside Categorical) is not stable in bf16
-        logits = actor(out).astype(jnp.float32)
-        logits = logits.reshape(logits.shape[:-1] + self.action_dim) 
+        logits = actor(local_features).astype(jnp.float32)
+        #logits = logits.reshape(logits.shape[:-1] + self.action_dim) 
 
         dist = distrax.Independent(
             distrax.Categorical(logits=logits),
             reinterpreted_batch_ndims=1 # last dimension is not independent
         )
+        new_hidden = None
+        values = critic(value_input)
 
-        values = critic(out)
-
-        return dist, jnp.squeeze(values, axis=-1), new_hidden
+        return dist, jnp.squeeze(values, axis=-1), hidden
 
     def initialize_carry(self, batch_size):
         return jnp.zeros((batch_size, self.rnn_num_layers, self.rnn_hidden_dim), dtype=self.dtype)

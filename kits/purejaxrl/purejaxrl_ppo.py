@@ -8,14 +8,92 @@ from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
 import gymnax
-from packages.purejaxrl.purejaxrl.wrappers import LogWrapper, FlattenObservationWrapper, NormalizeVecReward
+from packages.purejaxrl.purejaxrl.wrappers import LogWrapper
 import math
 from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_scan
 import functools
+from luxai_s3.params import EnvParams
+from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward
+
+# Re-use the ResNet block and convolutional encoder from before.
+class ResNetBlock(nn.Module):
+    features: int
+
+    @nn.compact
+    def __call__(self, x):
+        residual = x
+        x = nn.relu(x)
+        x = nn.Conv(self.features, kernel_size=(3, 3), padding='SAME',
+                    kernel_init=orthogonal(math.sqrt(2))
+                )(x)
+        x = nn.relu(x)
+        x = nn.Conv(self.features, kernel_size=(5, 5), padding='SAME',
+                    kernel_init=orthogonal(math.sqrt(2))
+                )(x)        
+        return x + residual
+
+# Agent-specific feature extraction using direct indexing
+class SpatialFeatureExtractor(nn.Module):
+    @nn.compact
+    def __call__(self, feature_map, agent_positions, mask):
+
+        def extract_features_for_timestep(fmap, positions, mask_t):
+            # fmap: [H, W, C]
+            # positions: [num_agents, 2]
+            # mask_t: [num_agents] (boolean)
+            def extract_feature(pos, valid):
+                row, col = pos  # extract row and col indices
+                feat = fmap[row, col, :]  # extract feature vector at that spatial location
+                # If the agent doesn't exist (valid == False), return zeros.
+                return jnp.where(valid, feat, jnp.zeros_like(feat))
+            # Vectorize over the num_agents dimension.
+            return debuggable_vmap(extract_feature)(positions, mask_t)
+        
+        # First, map over the time dimension.
+        #extract_over_time = debuggable_vmap(extract_features_for_timestep, in_axes=(0, 0, 0))
+        # Then, map over the batch dimension.
+        agent_features = debuggable_vmap(extract_features_for_timestep, in_axes=(0, 0, 0))(
+            feature_map, agent_positions, mask
+        )
+        return agent_features
+        
+        
+class EmbeddingEncoder(nn.Module):
+    map_tile_emb_dim: int = 4
+    fixed_env_params: EnvParams = EnvParams()
+    unit_cardinal_emb_dim: int = 8
+    
+    @nn.compact
+    def __call__(self, obs):
+        # 3 tiles types, empty, nebula, asteriod, and -1 for unknwon
+        tile_type_embeder = nn.Embed(4, self.map_tile_emb_dim, jnp.float32) # B x ENV x w x h x map_tile_emb_dim
+
+        # Encode each cardinal unit into an embedding
+        tile_type_embeddings = tile_type_embeder(obs.tile_type) # (B, ENV, w, h, 4)
+        unit_counts_map_reshaped = obs.unit_counts_player_0[..., jnp.newaxis] # (B, ENV, w, h, 1)
+        relic_map_reshaped = obs.relic_map[..., jnp.newaxis].astype(jnp.float32) # (B, ENV, w, h, 1)
+    
+        normalized_reward_last_round_reshaped = jnp.array(obs.normalized_reward_last_round)
+        normalized_reward_last_round_reshaped =  jnp.reshape(normalized_reward_last_round_reshaped, normalized_reward_last_round_reshaped.shape + (1,1,1)) # (B, Env) -> # (Env, 1,1,1)
+        normalized_reward_last_round_reshaped = jnp.tile(normalized_reward_last_round_reshaped, reps=(1,) + relic_map_reshaped.shape[-3:])  # (B, Env, w,h,1)
+
+        grid_embedding = jnp.concatenate(
+            [
+                tile_type_embeddings,
+                unit_counts_map_reshaped,
+                relic_map_reshaped,
+                normalized_reward_last_round_reshaped
+            ],
+            axis=-1, # Concatenate along the last axis (channels after wxh)
+        ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
+
+        return grid_embedding
+    
 
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
+    features_dim: int = 16
 
     @nn.compact
     def __call__(self, x):
@@ -23,27 +101,55 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
+           
+        grid_encoder = nn.Sequential(
+            [
+                EmbeddingEncoder(),
+                nn.Conv(
+                    self.features_dim,
+                    (3, 3),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
+                ResNetBlock(features=self.features_dim),
+                ResNetBlock(features=self.features_dim),
+            ]
+        )
+
+        grid_features = grid_encoder(x)
+        local_agent_features = SpatialFeatureExtractor()(grid_features, x.unit_positions_player_0, x.unit_mask_player_0) # [b  x num_agents, features]
+        local_agent_features = jnp.concatenate(
+            [
+                local_agent_features,
+                x.unit_mask_player_0[..., jnp.newaxis]
+            ],
+            axis=-1, # Add the mask to understand if the agent is actually there
+        )
+
         actor_mean = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
+        )(local_agent_features)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            math.prod(self.action_dim), kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
         #pi = distrax.Categorical(logits=actor_mean)
 
-        actor_mean = actor_mean.reshape((-1, *self.action_dim))
+        #actor_mean = actor_mean.reshape((-1, *self.action_dim))
         pi = distrax.Independent(
             distrax.Categorical(logits=actor_mean),
             reinterpreted_batch_ndims=1
         )
+
+        critic = local_agent_features.reshape(local_agent_features.shape[:-2] + (-1,)) # flatten num_agents and features into one vector for value guess
+        #critic = critic[jnp.newaxis, :] # add a leading dimenion
         critic = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
+        )(critic)
         critic = activation(critic)
         critic = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -76,7 +182,6 @@ def make_train(config, writer, env=None, env_params=None):
     if env is None and env_params is None:
         env, env_params = gymnax.make(config["ENV_NAME"])
 
-    env = FlattenObservationWrapper(env)
     env = LogWrapper(env)  # Log rewards before normalizing 
     env = NormalizeVecReward(env, config["GAMMA"])
 
@@ -95,7 +200,19 @@ def make_train(config, writer, env=None, env_params=None):
             [action_space.shape[0], action_space.n], activation=config["ACTIVATION"]
         )
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros(env.observation_space(env_params).shape)
+        def fill_zeroes(shape, dtype=jnp.int16):
+            return jnp.zeros((config["NUM_ENVS"], *shape), dtype=dtype)
+    
+        init_x = WrappedEnvObs(
+            relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
+            unit_counts_player_0=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
+            normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32),
+            unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
+            unit_mask_player_0=fill_zeroes((env_params.max_units,)),
+        )
+
+
         network_params = network.init(_rng, init_x)
         if config["ANNEAL_LR"]:
             tx = optax.chain(

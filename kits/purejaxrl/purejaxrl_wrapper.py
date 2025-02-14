@@ -6,9 +6,7 @@ from flax import struct
 from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
-from jax.experimental import host_callback
 
-from purejaxrl_util import MultiDiscrete
 from luxai_s3.params import EnvParams
 from luxai_s3.state import (
     ASTEROID_TILE,
@@ -21,7 +19,32 @@ from luxai_s3.state import (
     gen_state
 )
 
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_conditional_breakpoint
+from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap
+
+
+class MultiDiscrete:
+    """A minimal jittable MultiDiscrete space for Gymnax."""
+
+    def __init__(self, nvec, n):
+        # Convert to a JAX array (if not already)
+        self.nvec = jnp.array(nvec, dtype=jnp.int_)
+        self.shape = self.nvec.shape
+        self.n = n
+        self.dtype = jnp.int_
+
+    def sample(self, rng: chex.PRNGKey) -> chex.Array:
+        flat_nvec = self.nvec.flatten()
+        num_elements = flat_nvec.shape[0]
+        # Split the RNG for each element
+        keys = jax.random.split(rng, num_elements)
+        # Use vmap to sample for each discrete space in a vectorized way.
+        sample_fn = jax.vmap(lambda key, n: jax.random.randint(key, shape=(), minval=0, maxval=n))
+        samples_flat = sample_fn(keys, flat_nvec)
+        return samples_flat.reshape(self.shape)
+
+    def contains(self, x: chex.Array) -> jnp.ndarray:
+        # Check that all entries are within their respective bounds.
+        return jnp.all((x >= 0) & (x < self.nvec))
 
     
 class GymnaxWrapper(object):
@@ -36,12 +59,13 @@ class GymnaxWrapper(object):
 
 @struct.dataclass
 class WrappedEnvObs:
-    original_obs: EnvObs
     normalized_reward_last_round: float
-    discovered_relic_nodes_mask: chex.Array #  (N) for N max relic nodes"""
-    discovered_relic_node_positions: chex.Array #  (N, 2) for N max relic nodes and 2 features for position (x, y)
-    
-
+    tile_type: chex.Array
+    relic_map: chex.Array
+    unit_counts_player_0: chex.Array
+    unit_positions_player_0: chex.Array
+    unit_mask_player_0: chex.Array
+            
 @struct.dataclass
 class StatefulEnvState:
     discovered_relic_nodes_mask: chex.Array
@@ -116,75 +140,58 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         done = terminated[self.player] | truncated[self.player]
         return obs, WrappedEnvState(original_state=state, stateful_data=stateful_data), manufactured_reward, done, info
+    
+    def compute_counts_map(self, position, mask):
+        unit_counts_map = jnp.zeros(
+            (self.fixed_env_params.map_width, 
+             self.fixed_env_params.map_height), dtype=jnp.int16
+        )
 
+        def update_unit_counts_map(unit_position, unit_mask, unit_counts_map):
+            mask = unit_mask
+            unit_counts_map = unit_counts_map.at[
+                unit_position[0], unit_position[1]
+            ].add(mask.astype(jnp.int16))
+            return unit_counts_map
 
-    # def compute_counts_map(self, position, mask):
-    #     unit_counts_map = jnp.zeros(
-    #         (self.fixed_env_params.map_width, 
-    #          self.fixed_env_params.map_height), dtype=jnp.int16
-    #     )
-
-    #     def update_unit_counts_map(unit_position, unit_mask, unit_counts_map):
-    #         mask = unit_mask
-    #         unit_counts_map = unit_counts_map.at[
-    #             unit_position[0], unit_position[1]
-    #         ].add(mask.astype(jnp.int16))
-    #         return unit_counts_map
-
-    #     unit_counts_map = jnp.sum(
-    #             jax.vmap(update_unit_counts_map, in_axes=(0, 0, None), out_axes=0)(
-    #                 position, mask, unit_counts_map
-    #             ),
-    #             axis=0,
-    #             dtype=jnp.int16
-    #         )
+        unit_counts_map = jnp.sum(
+                debuggable_vmap(update_unit_counts_map, in_axes=(0, 0, None), out_axes=0)(
+                    position, mask, unit_counts_map
+                ),
+                axis=0,
+                dtype=jnp.int16
+            )
         
-    #     return unit_counts_map
+        return unit_counts_map
     
-    # def compute_units_map(self, obs):
-    #     units_map = jnp.full(
-    #         (self.fixed_env_params.num_teams, self.fix_env_params.max_units, self.fixed_env_params.map_width, 
-    #          self.fixed_env_params.map_height), -1, dtype=jnp.int16
-    #     )
-
-    #     def update_unit_map(unit_position, unit_mask, unit_index, units_map):
-    #         mask = unit_mask.astype(jnp.int16)
-    #         units_map = units_map.at[
-    #             unit_position[0], unit_position[1]
-    #         ].set((mask * (unit_index + 1)) - 1) # -1 if mask is 0, otherwise unit_index
-    #         return units_map
-
-    #     # is this order perserving???
-    #     unit_indexes = jnp.arange(self.fix_env_params.max_units)
-    #     for t in range(self.fixed_env_params.num_teams):
-    #         units_map = units_map.at[t].add(
-    #             jax.vmap(update_unit_map, in_axes=(0, 0, None, 0), out_axes=0)(
-    #                 obs.units.position[t], obs.units_mask[t], unit_indexes, units_map[t]
-    #             )
-    #         )
-    #     return units_map
-    
-    #@partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,))
     def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params):
         observed_relic_node_positions = jnp.array(obs.relic_nodes) # shape (max_relic_nodes, 2)
         observed_relic_nodes_mask = jnp.array(obs.relic_nodes_mask) # shape (max_relic_nodes, )
-        #team_points = np.array(obs["team_points"]) # points of each team, team_points[self.team_id] is the points of the your team
-        
-        # ids of units you can control at this timestep
 
         discovered_relic_nodes_mask = state.discovered_relic_nodes_mask | observed_relic_nodes_mask
         discovered_relic_node_positions = jnp.maximum(state.discovered_relic_node_positions, observed_relic_node_positions)
 
+        # relics
+        # No need to normalize this since I don't think relics can occupy the same space
+        relic_map = self.compute_counts_map(discovered_relic_node_positions, discovered_relic_nodes_mask)
+
+        unit_mask = jnp.array(obs.units_mask[self.team_id]) # shape (max_units, )
+        unit_positions = jnp.array(obs.units.position[self.team_id]) # shape (max_units, 2)
+        #unit_energys = np.array(obs["units"]["energy"][self.team_id]) # shape (max_units, 1)
+
+        unit_counts_player_0 = self.compute_counts_map(unit_positions, unit_mask) / float(self.fixed_env_params.max_units)
         norm_last_diff_player_0_points = self.extract_differece_points_player_0(obs, state) / self.fixed_env_params.max_units
 
 
         new_observation = WrappedEnvObs(
-            original_obs=obs,
-            discovered_relic_node_positions=discovered_relic_node_positions,
-            discovered_relic_nodes_mask=discovered_relic_nodes_mask,
-            normalized_reward_last_round=norm_last_diff_player_0_points
+            relic_map=relic_map,
+            unit_counts_player_0=unit_counts_player_0,
+            normalized_reward_last_round=norm_last_diff_player_0_points,
+            tile_type=jnp.array(obs.map_features.tile_type),
+            unit_positions_player_0=unit_positions,
+            unit_mask_player_0=unit_mask
         )
-        
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
                                      discovered_relic_nodes_mask=discovered_relic_nodes_mask,
@@ -233,7 +240,7 @@ class NormalizeVecReward(GymnaxWrapper):
 
     def reset(self, key, params=None):
         obs, state = self._env.reset(key, params)
-        batch_count = jax.tree_util.tree_leaves(obs)[0].shape[0]
+        batch_count = 1
         state = NormalizeVecRewEnvState(
             mean=0.0,
             var=1.0,
@@ -251,7 +258,7 @@ class NormalizeVecReward(GymnaxWrapper):
 
         batch_mean = jnp.mean(return_val, axis=0)
         batch_var = jnp.var(return_val, axis=0)
-        batch_count = jax.tree_util.tree_leaves(obs)[0].shape[0]
+        batch_count = 1
 
         delta = batch_mean - state.mean
         tot_count = state.count + batch_count

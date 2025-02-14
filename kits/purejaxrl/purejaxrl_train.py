@@ -10,7 +10,7 @@ import pickle
 from luxai_s3.params import EnvParams
 from luxai_s3.env import LuxAIS3Env
 from luxai_s3.params import env_params_ranges
-from purejaxrl_ppo_rnn import make_train
+from purejaxrl_ppo import make_train
 
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 
@@ -18,11 +18,11 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 1,
-    "NUM_STEPS": 8,
-    "TOTAL_TIMESTEPS": 1024,
-    "UPDATE_EPOCHS": 1,
-    "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
+    "NUM_ENVS": 8,
+    "NUM_STEPS": 128,
+    "TOTAL_TIMESTEPS": 200_000,
+    "UPDATE_EPOCHS": 2,
+    "NUM_MINIBATCHES": 2, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
@@ -31,7 +31,8 @@ config = {
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
     "ANNEAL_LR": True,
-    "DEBUG": True,
+    "DEBUG": False,
+    "PROFILE": False
 }
 
 if __name__ == "__main__":
@@ -42,7 +43,6 @@ if __name__ == "__main__":
 
     env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
-
     wrapped_env = LuxaiS3GymnaxWrapper(env, "player_0")
 
     rng = jax.random.PRNGKey(42)
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     summary_writer = tensorboard.SummaryWriter(log_subdir)
     summary_writer.hparams(dict(config))
 
-    if config["DEBUG"]:
+    if config["PROFILE"]:
         jax.profiler.start_trace(log_subdir)
     
     train_jit = jax.jit(make_train(config, summary_writer, wrapped_env, env_params))
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     out = jax.block_until_ready(train_jit(rng))
     print(f"time: {time.time() - t0:.2f} s")
 
-    if config["DEBUG"]:
+    if config["PROFILE"]:
         jax.profiler.stop_trace()
 
     summary_writer.close()
