@@ -65,13 +65,19 @@ class WrappedEnvObs:
     unit_counts_player_0: chex.Array
     unit_positions_player_0: chex.Array
     unit_mask_player_0: chex.Array
-            
+    grid_probability_of_being_energy_point_based_on_relic_positions: chex.Array
+    grid_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
+    grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
+
 @struct.dataclass
 class StatefulEnvState:
     discovered_relic_nodes_mask: chex.Array
     discovered_relic_node_positions: chex.Array
     team_wins: chex.Array
     team_points: chex.Array
+    sensor_last_visit: chex.Array
+    grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
+    grid_probability_of_not_being_an_energy_point_based_on_positive_rewards: chex.Array
 
 @struct.dataclass
 class WrappedEnvState:
@@ -106,6 +112,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         empty_data = StatefulEnvState(
             discovered_relic_nodes_mask=jnp.zeros(self.fixed_env_params.max_relic_nodes, dtype=jnp.int16),
             discovered_relic_node_positions=jnp.full((self.fixed_env_params.max_relic_nodes, 2), -1, dtype=jnp.int16),
+            sensor_last_visit=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
+            grid_probability_of_being_an_energy_point_based_on_no_reward=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
+            grid_probability_of_not_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
             team_wins=jnp.zeros(2, dtype=jnp.int16),
             team_points=jnp.zeros(2, dtype=jnp.int16),
         )
@@ -164,39 +173,141 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         
         return unit_counts_map
     
+
+    def multiply_5x5_mask_log_conv(self, arr):
+        mask_size = 5
+        kernel = jnp.ones((mask_size, mask_size), dtype=arr.dtype) # 5x5 kernel of ones
+
+        # --- Logarithm and Convolution ---
+
+        # Add a small epsilon to avoid log(0) errors.  Important if input can be exactly 0.
+        epsilon = 1e-7  # Or a suitably small value for your probability range
+        log_arr = jnp.log(arr + epsilon)  # Take logarithm of each element
+
+        # Perform convolution. "SAME" padding ensures output is same size as input.
+        # Feature group count and batch group count are both 1 for standard 2D convolution.
+        convolved_log_arr = jax.lax.conv_general_dilated(
+            lhs=log_arr.reshape(1, 1, arr.shape[0], arr.shape[1]), # Input in NCHW format (Batch=1, Channel=1)
+            rhs=kernel.reshape(1, 1, mask_size, mask_size),        # Kernel in OIHW format (OutputChannel=1, InputChannel=1)
+            window_strides=(1, 1),
+            padding="SAME",
+            lhs_dilation=(1, 1),
+            rhs_dilation=(1, 1),
+            dimension_numbers=jax.lax.ConvDimensionNumbers(
+                lhs_spec=(0, 1, 2, 3),  # NCHW: Batch, Channel, Height, Width
+                rhs_spec=(0, 1, 2, 3),  # OIHW: Output Channel, Input Channel, Kernel Height, Kernel Width
+                out_spec=(0, 1, 2, 3), # NCHW: Batch, Channel, Height, Width
+            )
+        ).reshape(arr.shape) # Reshape back to 2D
+
+        # --- Exponentiate to get the product ---
+        result = jnp.exp(convolved_log_arr)
+
+        return result
+
+    
     @partial(jax.jit, static_argnums=(0,))
     def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params):
+        total_spaces = self.fixed_env_params.map_width * self.fixed_env_params.map_height
         observed_relic_node_positions = jnp.array(obs.relic_nodes) # shape (max_relic_nodes, 2)
         observed_relic_nodes_mask = jnp.array(obs.relic_nodes_mask) # shape (max_relic_nodes, )
 
         discovered_relic_nodes_mask = state.discovered_relic_nodes_mask | observed_relic_nodes_mask
         discovered_relic_node_positions = jnp.maximum(state.discovered_relic_node_positions, observed_relic_node_positions)
-
-        # relics
-        # No need to normalize this since I don't think relics can occupy the same space
+        
+        num_relics_discovered = discovered_relic_nodes_mask.sum()
+        num_relics_undiscovered = self.fixed_env_params.max_relic_nodes  - num_relics_discovered
         relic_map = self.compute_counts_map(discovered_relic_node_positions, discovered_relic_nodes_mask)
+        
+        # 1) calculate last visit history
+        current_step_last_visit = obs.sensor_mask * obs.steps
+        sensor_mask_inverse = 1 - obs.sensor_mask
+        
+        sensor_last_visit = state.sensor_last_visit * sensor_mask_inverse # will set last_visit  to 0 wherever the sensors are visible
+        sensor_last_visit = sensor_last_visit + current_step_last_visit # will set last_visit to obs.match_steps wherever the sensors are visible
+
+
+        # 3) calculate probabilty of non-observable spaces having a relic:
+        #       # of relics undiscovered: discovered relics - max_relic_nodes
+        #       # probability a relic spawned there since visiting: / (undiscovered  / 100-time_since_last_visit) / # unobserved spaces
+        # This calculates how much time has passed since we visited this space, capped to the 100 time step.  If a space was visited after 100, we clip it to 0 since there's
+        # no chance a relic has spawned after that
+        time_passed_since_last_visit_until_final_relic_spawn = jnp.min(jnp.array([self.fixed_env_params.max_steps_in_match, obs.steps])) - sensor_last_visit
+        time_passed_since_last_visit_until_final_relic_spawn = jnp.clip(time_passed_since_last_visit_until_final_relic_spawn, min=0, max=self.fixed_env_params.max_steps_in_match)
+
+        grid_expected_num_of_relics_spawned_since_last_observation = (num_relics_undiscovered * (time_passed_since_last_visit_until_final_relic_spawn.astype(jnp.float32) / self.fixed_env_params.max_steps_in_match))
+        
+        num_unobserved_spaces = sensor_mask_inverse.sum()
+        grid_probability_of_relic_spawned_since_last_observation = grid_expected_num_of_relics_spawned_since_last_observation / num_unobserved_spaces
+
+        # 100% chance of spawning if 
+        grid_probability_of_relic_spawned_since_last_observation = jnp.where(relic_map == 1, 1., grid_probability_of_relic_spawned_since_last_observation)
+        grid_probability_of_relic_spawned_and_contributing_to_energy_point_since_last_observation = grid_probability_of_relic_spawned_since_last_observation / 25.
+
+        # 4) calculate probability of every space being an energy point
+        #       # 5x5 covulution of 1-p of all spaces around it
+        grid_probability_of_relic_not_spawned_and_contributing_to_energy_point_since_last_observation = (1. - grid_probability_of_relic_spawned_and_contributing_to_energy_point_since_last_observation)
+        grid_probability_of_being_energy_point_based_on_relic_positions = 1 - self.multiply_5x5_mask_log_conv(grid_probability_of_relic_not_spawned_and_contributing_to_energy_point_since_last_observation)
+
+        # 5) calculate probabily of not being an energy point based on reward obs
+        #       init: 1
+        #       (1-(reward/total units)))^units_on_spot) * prev value
 
         unit_mask = jnp.array(obs.units_mask[self.team_id]) # shape (max_units, )
         unit_positions = jnp.array(obs.units.position[self.team_id]) # shape (max_units, 2)
         #unit_energys = np.array(obs["units"]["energy"][self.team_id]) # shape (max_units, 1)
 
-        unit_counts_player_0 = self.compute_counts_map(unit_positions, unit_mask) / float(self.fixed_env_params.max_units)
-        norm_last_diff_player_0_points = self.extract_differece_points_player_0(obs, state) / self.fixed_env_params.max_units
+        unit_counts_player_0 = self.compute_counts_map(unit_positions, unit_mask)
+        normalized_unit_counts_player_0 = unit_counts_player_0 / float(self.fixed_env_params.max_units)
+        last_diff_player_0_points = self.extract_differece_points_player_0(obs, state)
+        norm_last_diff_player_0_points = last_diff_player_0_points / self.fixed_env_params.max_units
+
+        
+        # If there are no points, we need to do probability all relics being spawned
+        grid_unit_mask = jnp.clip(unit_counts_player_0, max=1).astype(jnp.float32)
+        inverse_grid_unit_mask = 1. - grid_unit_mask
+   
+        # MAYBE: account for actual relic discovereies
+        # Chance of a spot not being an EP when there is no reward is based on how far into spawning you are.  0 when you start and 100% when done
+        
+        percent_spawning_left = 1. - (jnp.min(jnp.array([self.fixed_env_params.max_steps_in_match, obs.steps])) / float(self.fixed_env_params.max_steps_in_match))
+        grid_probability_of_being_an_energy_point_based_on_no_reward = state.grid_probability_of_being_an_energy_point_based_on_no_reward * inverse_grid_unit_mask
+        grid_probability_of_being_an_energy_point_based_on_no_reward = grid_probability_of_being_an_energy_point_based_on_no_reward + (grid_unit_mask * percent_spawning_left)
+        grid_probability_of_being_an_energy_point_based_on_no_reward = jax.lax.cond(last_diff_player_0_points, lambda: state.grid_probability_of_being_an_energy_point_based_on_no_reward, lambda: grid_probability_of_being_an_energy_point_based_on_no_reward)
+
+        total_units_in_play = unit_mask.sum().astype(jnp.float32) + 1e-7
+        grid_probability_of_any_unit_not_being_on_energy_point = 1. - (last_diff_player_0_points / total_units_in_play)
+        grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions = jnp.power(grid_probability_of_any_unit_not_being_on_energy_point, unit_counts_player_0)
+        grid_probability_of_not_being_an_energy_point_based_on_positive_rewards = state.grid_probability_of_not_being_an_energy_point_based_on_positive_rewards * grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions
+        grid_probability_of_being_an_energy_point_based_on_positive_rewards = 1. - grid_probability_of_not_being_an_energy_point_based_on_positive_rewards
+
+        # 6) combines by multiplying?
+
+
+        # TODO: 
+
 
 
         new_observation = WrappedEnvObs(
             relic_map=relic_map,
-            unit_counts_player_0=unit_counts_player_0,
+            unit_counts_player_0=normalized_unit_counts_player_0,
             normalized_reward_last_round=norm_last_diff_player_0_points,
             tile_type=jnp.array(obs.map_features.tile_type),
             unit_positions_player_0=unit_positions,
-            unit_mask_player_0=unit_mask
+            unit_mask_player_0=unit_mask,
+            grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
+            grid_probability_of_being_an_energy_point_based_on_positive_rewards=grid_probability_of_being_an_energy_point_based_on_positive_rewards,
+            grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward
+
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
                                      discovered_relic_nodes_mask=discovered_relic_nodes_mask,
                                      team_wins=obs.team_wins,
                                      team_points=obs.team_points,
+                                     grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
+                                     grid_probability_of_not_being_an_energy_point_based_on_positive_rewards=grid_probability_of_not_being_an_energy_point_based_on_positive_rewards,
+                                     sensor_last_visit=sensor_last_visit
                                      )
         
         return new_observation, new_state

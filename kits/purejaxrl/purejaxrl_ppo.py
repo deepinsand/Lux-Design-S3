@@ -72,17 +72,18 @@ class EmbeddingEncoder(nn.Module):
         tile_type_embeddings = tile_type_embeder(obs.tile_type) # (B, ENV, w, h, 4)
         unit_counts_map_reshaped = obs.unit_counts_player_0[..., jnp.newaxis] # (B, ENV, w, h, 1)
         relic_map_reshaped = obs.relic_map[..., jnp.newaxis].astype(jnp.float32) # (B, ENV, w, h, 1)
+        grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped = obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis] # (B, ENV, w, h, 1)
+        grid_probability_of_being_an_energy_point_based_on_positive_rewards_reshaped = obs.grid_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis] # (B, ENV, w, h, 1)
+        grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped = obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis] # (B, ENV, w, h, 1)
     
-        normalized_reward_last_round_reshaped = jnp.array(obs.normalized_reward_last_round)
-        normalized_reward_last_round_reshaped =  jnp.reshape(normalized_reward_last_round_reshaped, normalized_reward_last_round_reshaped.shape + (1,1,1)) # (B, Env) -> # (Env, 1,1,1)
-        normalized_reward_last_round_reshaped = jnp.tile(normalized_reward_last_round_reshaped, reps=(1,) + relic_map_reshaped.shape[-3:])  # (B, Env, w,h,1)
-
         grid_embedding = jnp.concatenate(
             [
                 tile_type_embeddings,
                 unit_counts_map_reshaped,
                 relic_map_reshaped,
-                normalized_reward_last_round_reshaped
+                grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
+                grid_probability_of_being_an_energy_point_based_on_positive_rewards_reshaped,
+                grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
@@ -210,6 +211,9 @@ def make_train(config, writer, env=None, env_params=None):
             normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32),
             unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
             unit_mask_player_0=fill_zeroes((env_params.max_units,)),
+            grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            grid_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         )
 
 

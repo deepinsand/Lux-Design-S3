@@ -18,11 +18,11 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 8,
+    "NUM_ENVS": 1,
     "NUM_STEPS": 128,
     "TOTAL_TIMESTEPS": 200_000,
-    "UPDATE_EPOCHS": 2,
-    "NUM_MINIBATCHES": 2, # must be less than num_envs since RNN shuffles environemnts
+    "UPDATE_EPOCHS": 1,
+    "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
