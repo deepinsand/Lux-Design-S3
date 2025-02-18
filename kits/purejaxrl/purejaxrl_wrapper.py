@@ -289,9 +289,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
 
         new_observation = WrappedEnvObs(
-            relic_map=relic_map,
+            relic_map=relic_map, # not used
             unit_counts_player_0=normalized_unit_counts_player_0,
-            normalized_reward_last_round=norm_last_diff_player_0_points,
+            normalized_reward_last_round=norm_last_diff_player_0_points, # not used
             tile_type=jnp.array(obs.map_features.tile_type),
             unit_positions_player_0=unit_positions,
             unit_mask_player_0=unit_mask,
