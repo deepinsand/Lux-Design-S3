@@ -1,4 +1,7 @@
 import os
+
+import jax.experimental
+import jax.experimental.checkify
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 import jax
 import time
@@ -18,11 +21,11 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 1,
+    "NUM_ENVS": 8,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 500_000,
-    "UPDATE_EPOCHS": 1,
-    "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
+    "TOTAL_TIMESTEPS": 2_000_000,
+    "UPDATE_EPOCHS": 2,
+    "NUM_MINIBATCHES": 2, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
@@ -31,7 +34,7 @@ config = {
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
     "ANNEAL_LR": True,
-    "DEBUG": False,
+    "DEBUG": True,
     "PROFILE": False
 }
 
@@ -61,9 +64,15 @@ if __name__ == "__main__":
     if config["PROFILE"]:
         jax.profiler.start_trace(log_subdir)
     
-    train_jit = jax.jit(make_train(config, summary_writer, wrapped_env, env_params))
+    train_fn = make_train(config, summary_writer, wrapped_env, env_params)
+
+    #train_fn = jax.experimental.checkify.checkify(train_fn)
+
+    train_jit = jax.jit(train_fn)
     t0 = time.time()
     out = jax.block_until_ready(train_jit(rng))
+    #print(err.get())
+
     print(f"time: {time.time() - t0:.2f} s")
 
     if config["PROFILE"]:

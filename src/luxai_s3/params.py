@@ -22,7 +22,7 @@ class EnvParams:
 
 
     # configs for units
-    max_units: int = 1  # 16
+    max_units: int = 2  # 16
     init_unit_energy: int = 1000  # 100?
     min_unit_energy: int = 0
     max_unit_energy: int = 400

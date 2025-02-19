@@ -115,8 +115,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             sensor_last_visit=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             grid_probability_of_being_an_energy_point_based_on_no_reward=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
             grid_probability_of_not_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
-            team_wins=jnp.zeros(2, dtype=jnp.int16),
-            team_points=jnp.zeros(2, dtype=jnp.int16),
+            team_wins=jnp.zeros(2, dtype=jnp.int32),
+            team_points=jnp.zeros(2, dtype=jnp.int32),
         )
         return empty_data
     
@@ -140,14 +140,24 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         }
         
         obs, state, reward, terminated, truncated, info = self._env.step(key, wrapped_state.original_state, lux_action, params)
-        obs, stateful_data = self.transform_obs(obs[self.player], wrapped_state.stateful_data, params)
+        done = terminated[self.player] | truncated[self.player]
 
-        manufactured_reward = self.extract_differece_points_player_0(stateful_data, wrapped_state.stateful_data)
+        if self._env.auto_reset:
+            prev_stateful_data = jax.lax.cond(
+                done,
+                lambda: self.empty_stateful_env_state(),
+                lambda: wrapped_state.stateful_data
+            )
+        else:
+            prev_stateful_data = wrapped_state.stateful_data
+
+        obs, stateful_data = self.transform_obs(obs[self.player], prev_stateful_data, params)
+
+        manufactured_reward = self.extract_differece_points_player_0(stateful_data, prev_stateful_data)
 
         #jax.debug.print("team_points: {}, reward: {}, cond: {}", state.team_points, manufactured_reward, jnp.any(state.team_points))
         #debuggable_conditional_breakpoint(jnp.any(state.team_points))
 
-        done = terminated[self.player] | truncated[self.player]
         return obs, WrappedEnvState(original_state=state, stateful_data=stateful_data), manufactured_reward, done, info
     
     def compute_counts_map(self, position, mask):
@@ -260,6 +270,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_counts_player_0 = self.compute_counts_map(unit_positions, unit_mask)
         normalized_unit_counts_player_0 = unit_counts_player_0 / float(self.fixed_env_params.max_units)
         last_diff_player_0_points = self.extract_differece_points_player_0(obs, state)
+
+        match_over = self.is_match_over(obs, state)
+        
         norm_last_diff_player_0_points = last_diff_player_0_points / self.fixed_env_params.max_units
 
         
@@ -273,18 +286,22 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         percent_spawning_left = 1. - (jnp.min(jnp.array([self.fixed_env_params.max_steps_in_match, obs.steps])) / float(self.fixed_env_params.max_steps_in_match))
         grid_probability_of_being_an_energy_point_based_on_no_reward = state.grid_probability_of_being_an_energy_point_based_on_no_reward * inverse_grid_unit_mask
         grid_probability_of_being_an_energy_point_based_on_no_reward = grid_probability_of_being_an_energy_point_based_on_no_reward + (grid_unit_mask * percent_spawning_left)
-        grid_probability_of_being_an_energy_point_based_on_no_reward = jax.lax.cond(last_diff_player_0_points, lambda: state.grid_probability_of_being_an_energy_point_based_on_no_reward, lambda: grid_probability_of_being_an_energy_point_based_on_no_reward)
+        grid_probability_of_being_an_energy_point_based_on_no_reward = jax.lax.cond(
+            jnp.logical_or(last_diff_player_0_points, match_over), 
+            lambda: state.grid_probability_of_being_an_energy_point_based_on_no_reward, 
+            lambda: grid_probability_of_being_an_energy_point_based_on_no_reward
+        )
 
-        total_units_in_play = unit_mask.sum().astype(jnp.float32) + 1e-7
-        grid_probability_of_any_unit_not_being_on_energy_point = 1. - (last_diff_player_0_points / total_units_in_play)
-        grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions = jnp.power(grid_probability_of_any_unit_not_being_on_energy_point, unit_counts_player_0)
+        total_unique_positions_occupied = jnp.max(jnp.array([grid_unit_mask.sum().astype(jnp.float32), 1.]))
+        grid_probability_of_any_unit_not_being_on_energy_point = jax.lax.cond(match_over, lambda: 1., lambda: 1. - (last_diff_player_0_points / total_unique_positions_occupied))
+        grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions = (grid_unit_mask * grid_probability_of_any_unit_not_being_on_energy_point) + inverse_grid_unit_mask
         grid_probability_of_not_being_an_energy_point_based_on_positive_rewards = state.grid_probability_of_not_being_an_energy_point_based_on_positive_rewards * grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions
         grid_probability_of_being_an_energy_point_based_on_positive_rewards = 1. - grid_probability_of_not_being_an_energy_point_based_on_positive_rewards
 
         # 6) combines by multiplying?
 
 
-        # TODO: 
+        # TODO: account for units getting killed, check energy?
 
 
 
@@ -312,6 +329,15 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         
         return new_observation, new_state
     
+
+
+    def is_match_over(self, obs, old_state):
+        new_team_wins = jnp.array(obs.team_wins)
+        old_team_wins = jnp.array(old_state.team_wins)
+        diff_wins = new_team_wins - old_team_wins
+
+        return jnp.any(diff_wins)
+    
     def extract_differece_points_player_0(self, obs, old_state):
         
 
@@ -324,11 +350,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_points = new_team_points - old_team_points
         diff_wins = new_team_wins - old_team_wins
 
-        # Game or match is over so reset diff
-        # Match is reset so diff_wins should be 0
+        # On steps mod 101, the points are wiped out but the wins change.
+        # when the wins change we have no idea how many points we collected that round, or if they mattered, so count them as 0 ...
         diff_points_player_0 = jax.lax.cond(
             jnp.any(diff_wins),
-            lambda: 0,
+            lambda: 0,#jnp.dot(diff_wins, jnp.array([1,0])),
             lambda: jnp.dot(diff_points, jnp.array([1,0]))
         )
 

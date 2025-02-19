@@ -7,11 +7,11 @@ from typing import Tuple, Any, Sequence
 import collections
 from jax import tree_util  # Import tree_util
 
+disable_vmap_under_jit = False
 
 def debuggable_conditional_breakpoint(pred):
     # see https://github.com/jax-ml/jax/issues/15039 for why this is the best way
-
-    if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
+    if disable_vmap_under_jit:
         jax.lax.cond(pred, lambda: breakpoint(), lambda *args: None)
 
 
@@ -34,7 +34,7 @@ def debuggable_vmap(func, in_axes=0, out_axes=0):
     Returns:
         Either jax.vmap or loop_based_vmap_replacement, depending on JAX_DISABLE_JIT.
     """
-    if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
+    if (os.environ.get("JAX_DISABLE_JIT", "").lower() == "true") or disable_vmap_under_jit:
         return loop_based_vmap_replacement(func, in_axes=in_axes, out_axes=out_axes)
     else:
         return jax.vmap(func, in_axes=in_axes, out_axes=out_axes)

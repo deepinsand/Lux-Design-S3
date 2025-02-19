@@ -1,4 +1,6 @@
 import jax
+import jax.experimental
+import jax.experimental.checkify
 import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
@@ -10,7 +12,7 @@ import distrax
 import gymnax
 from packages.purejaxrl.purejaxrl.wrappers import LogWrapper
 import math
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_scan
+from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
 import functools
 from luxai_s3.params import EnvParams
 from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward
@@ -77,10 +79,11 @@ class EmbeddingEncoder(nn.Module):
     
         grid_embedding = jnp.concatenate(
             [
-                tile_type_embeddings,
-                unit_counts_map_reshaped,
-                #grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
+                #tile_type_embeddings,
+                #unit_counts_map_reshaped,
+                grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
                 grid_probability_of_being_an_energy_point_based_on_positive_rewards_reshaped,
+                #normalized_reward_last_round_reshaped
                 #grid_probability_of_being_energy_point_based_on_relic_positions_reshaped
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
@@ -104,14 +107,14 @@ class ActorCritic(nn.Module):
         grid_encoder = nn.Sequential(
             [
                 EmbeddingEncoder(),
-                nn.Conv(
-                    self.features_dim,
-                    (3, 3),
-                    padding="SAME",
-                    kernel_init=orthogonal(math.sqrt(2)),
-                ),
-                ResNetBlock(features=self.features_dim),
-                ResNetBlock(features=self.features_dim),
+                # nn.Conv(
+                #     self.features_dim,
+                #     (3, 3),
+                #     padding="SAME",
+                #     kernel_init=orthogonal(math.sqrt(2)),
+                # ),
+                #ResNetBlock(features=self.features_dim),
+                #ResNetBlock(features=self.features_dim),
             ]
         )
 
