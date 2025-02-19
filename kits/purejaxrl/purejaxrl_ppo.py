@@ -74,16 +74,16 @@ class EmbeddingEncoder(nn.Module):
         tile_type_embeddings = tile_type_embeder(obs.tile_type) # (B, ENV, w, h, 4)
         unit_counts_map_reshaped = obs.unit_counts_player_0[..., jnp.newaxis] # (B, ENV, w, h, 1)
         grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped = obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis] # (B, ENV, w, h, 1)
-        grid_probability_of_being_an_energy_point_based_on_positive_rewards_reshaped = obs.grid_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis] # (B, ENV, w, h, 1)
         grid_probability_of_being_energy_point_based_on_relic_positions_reshaped = obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis] # (B, ENV, w, h, 1)
     
         grid_embedding = jnp.concatenate(
             [
                 #tile_type_embeddings,
-                #unit_counts_map_reshaped,
-                grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
-                grid_probability_of_being_an_energy_point_based_on_positive_rewards_reshaped,
-                #normalized_reward_last_round_reshaped
+                unit_counts_map_reshaped,
+                #grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
+                obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
+                obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
+                obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 #grid_probability_of_being_energy_point_based_on_relic_positions_reshaped
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
@@ -113,6 +113,22 @@ class ActorCritic(nn.Module):
                 #     padding="SAME",
                 #     kernel_init=orthogonal(math.sqrt(2)),
                 # ),
+                # nn.relu,
+                #     nn.Conv(
+                #     self.features_dim,
+                #     (3, 3),
+                #     padding="SAME",
+                #     kernel_init=orthogonal(math.sqrt(2)),
+                # ),
+                # nn.relu,
+                #     nn.Conv(
+                #     self.features_dim,
+                #     (3, 3),
+                #     padding="SAME",
+                #     kernel_init=orthogonal(math.sqrt(2)),
+                # ),
+                # nn.relu,
+
                 #ResNetBlock(features=self.features_dim),
                 #ResNetBlock(features=self.features_dim),
             ]
@@ -209,12 +225,13 @@ def make_train(config, writer, env=None, env_params=None):
             relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
             unit_counts_player_0=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
-            normalized_reward_last_round=fill_zeroes((), dtype=jnp.float32),
             unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
             unit_mask_player_0=fill_zeroes((env_params.max_units,)),
             grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            grid_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         )
 
 

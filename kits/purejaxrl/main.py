@@ -12,7 +12,9 @@ from lux.kit import from_json
 agent_dict = dict() # store potentially multiple dictionaries as kaggle imports code directly
 agent_prev_obs = dict()
 import time
+import pickle
 
+all_new_obs = []
 def agent_fn(observation, configurations):
     """
     agent definition for kaggle submission.
@@ -34,7 +36,14 @@ def agent_fn(observation, configurations):
     sys.path.append(os.path.abspath(dirname))
 
     agent = agent_dict[player]
-    actions = agent.act(step, from_json(obs), remainingOverageTime)
+    actions, new_obs = agent.act(step, from_json(obs), remainingOverageTime)
+
+    if player == "player_0":
+        all_new_obs.append(new_obs)
+        if step == 504:
+            with open("logs/obs.pkl", 'wb') as f: # Binary write mode for pickle
+                pickle.dump(all_new_obs, f) # Directly pickle train_state.params
+            print(f"New observations saved to (pickle): logs/obs.pkl")
     return dict(action=actions.tolist())
 
 

@@ -59,15 +59,16 @@ class GymnaxWrapper(object):
 
 @struct.dataclass
 class WrappedEnvObs:
-    normalized_reward_last_round: float
     tile_type: chex.Array
     relic_map: chex.Array
     unit_counts_player_0: chex.Array
     unit_positions_player_0: chex.Array
     unit_mask_player_0: chex.Array
     grid_probability_of_being_energy_point_based_on_relic_positions: chex.Array
-    grid_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
+    grid_max_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
+    grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
+    grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
 
 @struct.dataclass
 class StatefulEnvState:
@@ -77,7 +78,10 @@ class StatefulEnvState:
     team_points: chex.Array
     sensor_last_visit: chex.Array
     grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
-    grid_probability_of_not_being_an_energy_point_based_on_positive_rewards: chex.Array
+    grid_max_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
+    grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
+    total_rewards_when_positions_are_occupied: chex.Array
+    total_times_positions_are_occupied: chex.Array
 
 @struct.dataclass
 class WrappedEnvState:
@@ -114,7 +118,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             discovered_relic_node_positions=jnp.full((self.fixed_env_params.max_relic_nodes, 2), -1, dtype=jnp.int16),
             sensor_last_visit=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             grid_probability_of_being_an_energy_point_based_on_no_reward=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
-            grid_probability_of_not_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
+            grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 0., dtype=jnp.float32),
+            grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
+            total_rewards_when_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 0., dtype=jnp.float32),
+            total_times_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.int16),
             team_wins=jnp.zeros(2, dtype=jnp.int32),
             team_points=jnp.zeros(2, dtype=jnp.int32),
         )
@@ -273,30 +280,43 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         match_over = self.is_match_over(obs, state)
         
-        norm_last_diff_player_0_points = last_diff_player_0_points / self.fixed_env_params.max_units
+
 
         
         # If there are no points, we need to do probability all relics being spawned
-        grid_unit_mask = jnp.clip(unit_counts_player_0, max=1).astype(jnp.float32)
-        inverse_grid_unit_mask = 1. - grid_unit_mask
+        grid_unit_mask = jnp.clip(unit_counts_player_0, max=1)
+        grid_unit_mask_float = grid_unit_mask.astype(jnp.float32)
+        inverse_grid_unit_mask_float = 1. - grid_unit_mask_float
    
         # MAYBE: account for actual relic discovereies
         # Chance of a spot not being an EP when there is no reward is based on how far into spawning you are.  0 when you start and 100% when done
         
         percent_spawning_left = 1. - (jnp.min(jnp.array([self.fixed_env_params.max_steps_in_match, obs.steps])) / float(self.fixed_env_params.max_steps_in_match))
-        grid_probability_of_being_an_energy_point_based_on_no_reward = state.grid_probability_of_being_an_energy_point_based_on_no_reward * inverse_grid_unit_mask
-        grid_probability_of_being_an_energy_point_based_on_no_reward = grid_probability_of_being_an_energy_point_based_on_no_reward + (grid_unit_mask * percent_spawning_left)
+        grid_probability_of_being_an_energy_point_based_on_no_reward = state.grid_probability_of_being_an_energy_point_based_on_no_reward * inverse_grid_unit_mask_float
+        grid_probability_of_being_an_energy_point_based_on_no_reward = grid_probability_of_being_an_energy_point_based_on_no_reward + (grid_unit_mask_float * percent_spawning_left)
         grid_probability_of_being_an_energy_point_based_on_no_reward = jax.lax.cond(
             jnp.logical_or(last_diff_player_0_points, match_over), 
             lambda: state.grid_probability_of_being_an_energy_point_based_on_no_reward, 
             lambda: grid_probability_of_being_an_energy_point_based_on_no_reward
         )
 
-        total_unique_positions_occupied = jnp.max(jnp.array([grid_unit_mask.sum().astype(jnp.float32), 1.]))
-        grid_probability_of_any_unit_not_being_on_energy_point = jax.lax.cond(match_over, lambda: 1., lambda: 1. - (last_diff_player_0_points / total_unique_positions_occupied))
-        grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions = (grid_unit_mask * grid_probability_of_any_unit_not_being_on_energy_point) + inverse_grid_unit_mask
-        grid_probability_of_not_being_an_energy_point_based_on_positive_rewards = state.grid_probability_of_not_being_an_energy_point_based_on_positive_rewards * grid_probability_of_not_being_an_energy_point_based_on_this_turns_positions
-        grid_probability_of_being_an_energy_point_based_on_positive_rewards = 1. - grid_probability_of_not_being_an_energy_point_based_on_positive_rewards
+        total_unique_positions_occupied = jnp.max(jnp.array([grid_unit_mask_float.sum(), 1.]))
+        probability_of_any_unit_being_on_energy_point = jax.lax.cond(match_over, lambda: 0., lambda: last_diff_player_0_points / total_unique_positions_occupied)
+        grid_probability_of_being_an_energy_point_based_on_this_turns_positions = (grid_unit_mask_float * probability_of_any_unit_being_on_energy_point)
+
+        total_rewards_when_positions_are_occupied = state.total_rewards_when_positions_are_occupied + grid_probability_of_being_an_energy_point_based_on_this_turns_positions
+        grid_unit_mask_if_match_not_over = jax.lax.cond(match_over, lambda: jnp.zeros_like(grid_unit_mask), lambda: grid_unit_mask)
+        total_times_positions_are_occupied = state.total_times_positions_are_occupied + grid_unit_mask_if_match_not_over # should this account for relic spawning?
+
+        
+        grid_max_probability_of_being_an_energy_point_based_on_positive_rewards = jnp.max(jnp.array([state.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards, grid_probability_of_being_an_energy_point_based_on_this_turns_positions]), axis=0)
+        grid_min_probability_of_being_an_energy_point_based_on_positive_rewards =  jax.lax.cond(
+            match_over, 
+            lambda: state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
+            lambda: jnp.min(jnp.array([state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards, grid_probability_of_being_an_energy_point_based_on_this_turns_positions]), axis=0)
+        )
+        grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards = total_rewards_when_positions_are_occupied / total_times_positions_are_occupied
+        
 
         # 6) combines by multiplying?
 
@@ -308,12 +328,13 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         new_observation = WrappedEnvObs(
             relic_map=relic_map, # not used
             unit_counts_player_0=normalized_unit_counts_player_0,
-            normalized_reward_last_round=norm_last_diff_player_0_points, # not used
             tile_type=jnp.array(obs.map_features.tile_type),
             unit_positions_player_0=unit_positions,
             unit_mask_player_0=unit_mask,
             grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
-            grid_probability_of_being_an_energy_point_based_on_positive_rewards=grid_probability_of_being_an_energy_point_based_on_positive_rewards,
+            grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
+            grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
+            grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward
 
         )
@@ -323,7 +344,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      team_wins=obs.team_wins,
                                      team_points=obs.team_points,
                                      grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
-                                     grid_probability_of_not_being_an_energy_point_based_on_positive_rewards=grid_probability_of_not_being_an_energy_point_based_on_positive_rewards,
+                                     grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
+                                     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
+                                     total_rewards_when_positions_are_occupied=total_rewards_when_positions_are_occupied,
+                                     total_times_positions_are_occupied=total_times_positions_are_occupied,
                                      sensor_last_visit=sensor_last_visit
                                      )
         
