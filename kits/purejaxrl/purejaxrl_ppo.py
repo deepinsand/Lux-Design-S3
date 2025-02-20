@@ -270,7 +270,7 @@ def make_train(config, writer, env=None, env_params=None):
         obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
 
         # TRAIN LOOP
-        def _update_step(runner_state, update_count):
+        def _update_step(update_count, runner_state):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, rng = runner_state
@@ -481,13 +481,12 @@ def make_train(config, writer, env=None, env_params=None):
                 jax.debug.callback(callback, metric)
 
             runner_state = (train_state, env_state, last_obs, rng)
-            return runner_state, metric
+            return runner_state
 
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
-        runner_state, metric = jax.lax.scan(
-            _update_step, runner_state, jnp.arange(config["NUM_UPDATES"]), config["NUM_UPDATES"]
-        )
-        return {"runner_state": runner_state, "metrics": metric}
+        runner_state = jax.lax.fori_loop(0, config["NUM_UPDATES"], _update_step, runner_state)
+
+        return {"runner_state": runner_state}
 
     return train
