@@ -88,4 +88,4 @@ class Agent():
         actions[:, 0] = np.array(action)
         #print(f"turn to np: {time.time() - t0:.2f} s")
 
-        return actions, new_obs, self.env_state
+        return actions, new_obs, env_obs, self.env_state

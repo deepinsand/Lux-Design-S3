@@ -11,15 +11,29 @@ import jax.numpy as jnp
 import pickle
 from luxai_s3.params import EnvParams
 from luxai_s3.env import LuxAIS3Env
-from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
+from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
+from luxai_s3.state import EnvObs
 
 
 if __name__ == "__main__":
-    jnp.set_printoptions(linewidth=500)
+    jnp.set_printoptions(linewidth=500, suppress=True, precision=4)
+    
+    underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=EnvParams())
+    env = LuxaiS3GymnaxWrapper(underlying_env, "player_0")
+    
 
     with open("logs/obs.pkl", 'rb') as f: # Binary read mode for pickle
         file = pickle.load(f) # Load parameters directly using pickle.load
 
-    obs = file["obs"]
+    new_obs = file["new_obs"]
+    original_obs = file["original_obs"]
     state = file["state"]
-    print(obs[0])
+
+    step = 343
+    original_obs_step = original_obs[step]
+    state_step = state[step]
+    new_obs_step = new_obs[343]
+
+    next_obs, next_env_state = env.transform_obs(original_obs_step, state_step, env.fixed_env_params)
+
+    print(next_obs)
