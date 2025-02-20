@@ -284,12 +284,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # if obs.steps > 100, make this 0
         second_relic_spawn_conditional_start_time = jax.lax.cond(obs.steps > 100, lambda: obs.steps, lambda: -1)
         unobserved_time_during_second_relic_spawn = jnp.min(jnp.array([150, second_relic_spawn_conditional_start_time])) - sensor_last_visit # capped at 150 because unobserved time after that is irrellevant
-        unobserved_time_during_second_relic_spawn = jnp.clip(unobserved_time_during_second_relic_spawn, min=0, max=50) - 100 # capped at 50
+        unobserved_time_during_second_relic_spawn = jnp.clip(unobserved_time_during_second_relic_spawn, min=0, max=50) # capped at 50
 
         # if obs.steps > 200, make this 0
         third_relic_spawn_conditional_start_time = jax.lax.cond(obs.steps > 200, lambda: obs.steps, lambda: -1)
         unobserved_time_during_third_relic_spawn = jnp.min(jnp.array([250, third_relic_spawn_conditional_start_time])) - sensor_last_visit # capped at 150 because unobserved time after that is irrellevant
-        unobserved_time_during_third_relic_spawn = jnp.clip(unobserved_time_during_third_relic_spawn, min=0, max=50) - 100 # capped at 50
+        unobserved_time_during_third_relic_spawn = jnp.clip(unobserved_time_during_third_relic_spawn, min=0, max=50) # capped at 50
         
         # Lower chances of later relics being spawned
         probability_weighted_unobserved_spawn_time_since_last_observation = (unobserved_time_during_first_relic_spawn) + (0.66 * unobserved_time_during_second_relic_spawn) + (0.33 * unobserved_time_during_third_relic_spawn)
@@ -348,7 +348,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             lambda: last_time_sure_no_energy_point
         )
 
-        grid_probability_of_being_an_energy_point_based_on_no_reward = jnp.clip(last_time_sure_no_energy_point.astype(jnp.float32) / last_relic_spawn_point, max=1.)
+        grid_probability_of_being_an_energy_point_based_on_no_reward = jnp.clip(last_time_sure_no_energy_point.astype(jnp.float32) / last_relic_spawn_point, max=1., min=0.)
 
         # grid_probability_of_being_an_energy_point_based_on_no_reward = jnp.zeros_like(last_time_sure_no_energy_point, dtype=jnp.float32)
         # for i in range(2):
