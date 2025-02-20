@@ -84,7 +84,7 @@ class EmbeddingEncoder(nn.Module):
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
-                #grid_probability_of_being_energy_point_based_on_relic_positions_reshaped
+                grid_probability_of_being_energy_point_based_on_relic_positions_reshaped
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
@@ -107,12 +107,12 @@ class ActorCritic(nn.Module):
         grid_encoder = nn.Sequential(
             [
                 EmbeddingEncoder(),
-                # nn.Conv(
-                #     self.features_dim,
-                #     (3, 3),
-                #     padding="SAME",
-                #     kernel_init=orthogonal(math.sqrt(2)),
-                # ),
+                nn.Conv(
+                    self.features_dim,
+                    (2, 2),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
                 # nn.relu,
                 #     nn.Conv(
                 #     self.features_dim,
@@ -129,20 +129,32 @@ class ActorCritic(nn.Module):
                 # ),
                 # nn.relu,
 
-                #ResNetBlock(features=self.features_dim),
-                #ResNetBlock(features=self.features_dim),
+                ResNetBlock(features=self.features_dim),
+                ResNetBlock(features=self.features_dim),
             ]
         )
 
         grid_features = grid_encoder(x)
-        local_agent_features = SpatialFeatureExtractor()(grid_features, x.unit_positions_player_0, x.unit_mask_player_0) # [b  x num_agents, features]
+        local_agent_features = SpatialFeatureExtractor()(grid_features, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
+        num_agents = x.unit_mask_player_0.shape[-1]
+
+        # ---- Global Branch ----
+        # Compute a global context vector using a global average pooling over the spatial dims.
+
+        global_context = jnp.mean(grid_features, axis=(1,2))  # mb_size x features
+        global_context = jnp.reshape(global_context, global_context.shape[:-1] + (1,) + global_context.shape[-1:]) # mb_size x 1 x features
+        global_context = jnp.tile(global_context, (num_agents, 1))
         local_agent_features = jnp.concatenate(
             [
                 local_agent_features,
-                x.unit_mask_player_0[..., jnp.newaxis]
+                x.unit_mask_player_0[..., jnp.newaxis],
+                global_context
             ],
             axis=-1, # Add the mask to understand if the agent is actually there
         )
+
+
+
 
         actor_mean = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)

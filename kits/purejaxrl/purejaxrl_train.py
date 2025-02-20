@@ -21,9 +21,9 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 2,
+    "NUM_ENVS": 1,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 500_000,
+    "TOTAL_TIMESTEPS": 5_000_000,
     "UPDATE_EPOCHS": 2,
     "NUM_MINIBATCHES": 2, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
