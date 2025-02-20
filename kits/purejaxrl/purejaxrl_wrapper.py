@@ -77,7 +77,7 @@ class StatefulEnvState:
     team_wins: chex.Array
     team_points: chex.Array
     sensor_last_visit: chex.Array
-    grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
+    last_time_sure_no_energy_point: chex.Array
     grid_max_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     total_rewards_when_positions_are_occupied: chex.Array
@@ -117,7 +117,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             discovered_relic_nodes_mask=jnp.zeros(self.fixed_env_params.max_relic_nodes, dtype=jnp.int16),
             discovered_relic_node_positions=jnp.full((self.fixed_env_params.max_relic_nodes, 2), -1, dtype=jnp.int16),
             sensor_last_visit=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
-            grid_probability_of_being_an_energy_point_based_on_no_reward=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
+            last_time_sure_no_energy_point=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 0., dtype=jnp.float32),
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
             total_rewards_when_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 0., dtype=jnp.float32),
@@ -234,8 +234,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         
         num_relics_discovered = discovered_relic_nodes_mask.sum()
 
-        # relics stop spawning after match
-        num_relics_undiscovered = self.fixed_env_params.max_relic_nodes  - num_relics_discovered
+        # state.py:348 shows spawn schedule.  2 spawn 0.50 with 100%, 2 spawn 100-150 with 66%, 2 spawn 200-250 with 33%
+        spawn_steps = obs.steps // (self.fixed_env_params.max_steps_in_match // 2)
+        max_relics = jnp.min(jnp.array([(1 + (obs.steps // self.fixed_env_params.max_steps_in_match)) * 2, self.fixed_env_params.max_relic_nodes]))
+        num_relics_undiscovered = max_relics - num_relics_discovered
         relic_map = self.compute_counts_map(discovered_relic_node_positions, discovered_relic_nodes_mask)
         
         # 1) calculate last visit history
@@ -245,7 +247,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         sensor_last_visit = state.sensor_last_visit * sensor_mask_inverse # will set last_visit  to 0 wherever the sensors are visible
         sensor_last_visit = sensor_last_visit + current_step_last_visit # will set last_visit to obs.match_steps wherever the sensors are visible
 
-        last_relic_spawn_point = self.fixed_env_params.max_steps_in_match * 3 # state.py:348 shows spawn schedule
+        last_relic_spawn_point = (self.fixed_env_params.max_steps_in_match * 5) // 2 # state.py:348 shows spawn schedule
         has_seen_everywhere_after_match_1 = jnp.all(sensor_last_visit > last_relic_spawn_point)
         num_relics_undiscovered = num_relics_undiscovered * (1 - has_seen_everywhere_after_match_1) # once we've seen everywhere we know there are no more relics to discover
 
@@ -254,17 +256,49 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         #       # probability a relic spawned there since visiting: / (undiscovered  / 100-time_since_last_visit) / # unobserved spaces
         # This calculates how much time has passed since we visited this space, capped to the 100 time step.  If a space was visited after 100, we clip it to 0 since there's
         # no chance a relic has spawned after that
-        time_passed_since_last_visit_until_final_relic_spawn = jnp.min(jnp.array([last_relic_spawn_point, obs.steps])) - sensor_last_visit
-        time_passed_since_last_visit_until_final_relic_spawn = jnp.clip(time_passed_since_last_visit_until_final_relic_spawn, min=0, max=last_relic_spawn_point)
+        # for i in range(2):
+        #     steps_in_match = self.fixed_env_params.max_steps_in_match
+        #     half_steps_in_match = steps_in_match // 2
+        #     first_relic_possible_spawn_time = steps_in_match * i
+        #     last_relic_possible_spawn_time = steps_in_match * i + half_steps_in_match
+        #     time_elapsed_during_this_spawn =  jnp.max(jnp.array([jnp.min(jnp.array([last_relic_possible_spawn_time, obs.step])) - first_relic_possible_spawn_time, 0]))  # obs.step capped at 150, - 100, then minimum 0
 
-        grid_expected_num_of_relics_spawned_since_last_observation = (num_relics_undiscovered * (time_passed_since_last_visit_until_final_relic_spawn.astype(jnp.float32) / last_relic_spawn_point))
+        #     # effectively repeat the same caclulation but on a grid
+        #     sensor_last_visit_relevant_during_this_spawn_time = jnp.max(jnp.array([sensor_last_visit, first_relic_possible_spawn_time]), axis=0) # Will this broadcast correctly?
+        #     unobserved_time_during_n_relic_spawn = jnp.min(jnp.array([last_relic_possible_spawn_time, obs.step])) - sensor_last_visit_relevant_during_this_spawn_time # capped at 50 because unobserved time after that is irrellevant
+        #     unobserved_time_during_n_relic_spawn = jnp.clip(unobserved_time_during_n_relic_spawn, min=0, max=half_steps_in_match) # capped at 50
+            
+
+        #     probabilty_relic_has_spawned = ((3-i) / 3.) * (time_elapsed_during_this_spawn.astype(jnp.float32) / half_steps_in_match) # each spawn period has 1/3 less chance of spawning, multiplied by how much time is in this period
+        #     expected_relics_during_this_spawn_period = 2. * probabilty_relic_has_spawned
+
+        #     relative_probability_of_space_spawning_relic = unobserved_time_during_n_relic_spawn / (unobserved_time_during_n_relic_spawn.sum() + 1e-9) # normalize 
+        #     grid_expected_num_of_relics_spawned_since_last_observation = relative_probability_of_space_spawning_relic * num_relics_undiscovered
+        #     grid_probability_of_relic_spawned_and_contributing_to_energy_point_since_last_observation = grid_expected_num_of_relics_spawned_since_last_observation / 5.
+
+
+
+        unobserved_time_during_first_relic_spawn = jnp.min(jnp.array([50, obs.steps])) - sensor_last_visit # capped at 50 because unobserved time after that is irrellevant
+        unobserved_time_during_first_relic_spawn = jnp.clip(unobserved_time_during_first_relic_spawn, min=0, max=50) # capped at 50
+
+        # if obs.steps > 100, make this 0
+        second_relic_spawn_conditional_start_time = jax.lax.cond(obs.steps > 100, lambda: obs.steps, lambda: -1)
+        unobserved_time_during_second_relic_spawn = jnp.min(jnp.array([150, second_relic_spawn_conditional_start_time])) - sensor_last_visit # capped at 150 because unobserved time after that is irrellevant
+        unobserved_time_during_second_relic_spawn = jnp.clip(unobserved_time_during_second_relic_spawn, min=0, max=50) - 100 # capped at 50
+
+        # if obs.steps > 200, make this 0
+        third_relic_spawn_conditional_start_time = jax.lax.cond(obs.steps > 200, lambda: obs.steps, lambda: -1)
+        unobserved_time_during_third_relic_spawn = jnp.min(jnp.array([250, third_relic_spawn_conditional_start_time])) - sensor_last_visit # capped at 150 because unobserved time after that is irrellevant
+        unobserved_time_during_third_relic_spawn = jnp.clip(unobserved_time_during_third_relic_spawn, min=0, max=50) - 100 # capped at 50
         
-        num_unobserved_spaces = sensor_mask_inverse.sum()
-        grid_probability_of_relic_spawned_since_last_observation = grid_expected_num_of_relics_spawned_since_last_observation / num_unobserved_spaces
+        # Lower chances of later relics being spawned
+        probability_weighted_unobserved_spawn_time_since_last_observation = (unobserved_time_during_first_relic_spawn) + (0.66 * unobserved_time_during_second_relic_spawn) + (0.33 * unobserved_time_during_third_relic_spawn)
+        relative_probability_of_space_spawning_relic = probability_weighted_unobserved_spawn_time_since_last_observation / (probability_weighted_unobserved_spawn_time_since_last_observation.sum() + 1e-9) # normalize 
+        grid_expected_num_of_relics_spawned_since_last_observation = relative_probability_of_space_spawning_relic * num_relics_undiscovered
 
         # 100% chance of spawning if 
-        grid_probability_of_relic_spawned_since_last_observation = jnp.where(relic_map > 0, relic_map, grid_probability_of_relic_spawned_since_last_observation)
-        grid_probability_of_relic_spawned_and_contributing_to_energy_point_since_last_observation = grid_probability_of_relic_spawned_since_last_observation / 5. # staet.py:304 makes 20% of tiles valid 
+        grid_expected_num_of_relics_spawned_since_last_observation = jnp.where(relic_map > 0, relic_map, grid_expected_num_of_relics_spawned_since_last_observation)
+        grid_probability_of_relic_spawned_and_contributing_to_energy_point_since_last_observation = grid_expected_num_of_relics_spawned_since_last_observation / 5. # staet.py:304 makes 20% of tiles valid 
 
         # 4) calculate probability of every space being an energy point
         #       # 5x5 covulution of 1-p of all spaces around it
@@ -285,11 +319,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         match_over = self.is_match_over(obs, state)
         
-
-
-        
         # If there are no points, we need to do probability all relics being spawned
         grid_unit_mask = jnp.clip(unit_counts_player_0, max=1)
+        inverse_grid_unit_mask = 1 - grid_unit_mask
+
+
         grid_unit_mask_float = grid_unit_mask.astype(jnp.float32)
         inverse_grid_unit_mask_float = 1. - grid_unit_mask_float
    
@@ -305,21 +339,39 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         grid_max_probability_of_being_an_energy_point_based_on_positive_rewards = jnp.max(jnp.array([state.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards, grid_probability_of_being_an_energy_point_based_on_this_turns_positions]), axis=0)
 
-        # Chance of a spot not being an EP when there is no reward is based on how far into spawning you are.  0 when you start and 100% when done
-        percent_spawning_left = 1. - (jnp.min(jnp.array([last_relic_spawn_point, obs.steps])) / float(last_relic_spawn_point))
-        grid_probability_of_being_an_energy_point_based_on_no_reward = inverse_grid_unit_mask_float + (grid_unit_mask_float * percent_spawning_left)
 
-        grid_probability_of_being_an_energy_point_with_spawning_accounted_for = jax.lax.cond(
-            last_diff_player_0_points, 
-            lambda: grid_probability_of_being_an_energy_point_based_on_this_turns_positions + inverse_grid_unit_mask_float, 
-            lambda: grid_probability_of_being_an_energy_point_based_on_no_reward
-        )        
-        
-        grid_min_probability_of_being_an_energy_point_based_on_positive_rewards =  jax.lax.cond(
-            match_over, 
-            lambda: state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
-            lambda: jnp.min(jnp.array([state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards, grid_probability_of_being_an_energy_point_with_spawning_accounted_for]), axis=0)
+        last_time_sure_no_energy_point = state.last_time_sure_no_energy_point * inverse_grid_unit_mask
+        last_time_sure_no_energy_point = last_time_sure_no_energy_point + (grid_unit_mask * obs.steps)
+        last_time_sure_no_energy_point = jax.lax.cond(
+            jnp.logical_or(last_diff_player_0_points, match_over), 
+            lambda: state.last_time_sure_no_energy_point, 
+            lambda: last_time_sure_no_energy_point
         )
+
+        grid_probability_of_being_an_energy_point_based_on_no_reward = jnp.clip(last_time_sure_no_energy_point.astype(jnp.float32) / last_relic_spawn_point, max=1.)
+
+        # grid_probability_of_being_an_energy_point_based_on_no_reward = jnp.zeros_like(last_time_sure_no_energy_point, dtype=jnp.float32)
+        # for i in range(2):
+        #     steps_in_match = self.fixed_env_params.max_steps_in_match
+        #     half_steps_in_match = steps_in_match // 2
+        #     first_relic_possible_spawn_time = steps_in_match * i
+        #     last_relic_possible_spawn_time = steps_in_match * i + half_steps_in_match
+
+        #     # effectively repeat the same caclulation but on a grid
+        #     last_time_sure_no_energy_point_relevant_during_this_spawn_time = jnp.clip(last_time_sure_no_energy_point, min=first_relic_possible_spawn_time)
+        #     unsure_time_of_no_energy_point_during_this_spawn_time = jnp.min(jnp.array([last_relic_possible_spawn_time, obs.steps])) - last_time_sure_no_energy_point_relevant_during_this_spawn_time # capped at 50 because unobserved time after that is irrellevant
+        #     unsure_time_of_no_energy_point_during_this_spawn_time = jnp.clip(unsure_time_of_no_energy_point_during_this_spawn_time, min=0, max=half_steps_in_match) # capped at 50
+        #     probability_of_no_energy_point_during_this_spawn_time = unsure_time_of_no_energy_point_during_this_spawn_time.astype(jnp.float32) / half_steps_in_match
+        #     probability_adjustment_of_no_energy_point_during_this_spawn_time = probability_of_no_energy_point_during_this_spawn_time * (((3-i) / 3.) / 2.)
+        #     grid_probability_of_being_an_energy_point_based_on_no_reward = grid_probability_of_being_an_energy_point_based_on_no_reward + probability_adjustment_of_no_energy_point_during_this_spawn_time
+
+
+        grid_min_probability_of_being_an_energy_point_based_on_positive_rewards =  jax.lax.cond(
+            jnp.logical_or(jnp.logical_not(last_diff_player_0_points), match_over), 
+            lambda: state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
+            lambda: jnp.min(jnp.array([state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards, grid_probability_of_being_an_energy_point_based_on_this_turns_positions]), axis=0)
+        )
+        
         grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards = total_rewards_when_positions_are_occupied / total_times_positions_are_occupied
         
 
@@ -348,7 +400,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      discovered_relic_nodes_mask=discovered_relic_nodes_mask,
                                      team_wins=obs.team_wins,
                                      team_points=obs.team_points,
-                                     grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
+                                     last_time_sure_no_energy_point=last_time_sure_no_energy_point,
                                      grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
                                      grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
                                      total_rewards_when_positions_are_occupied=total_rewards_when_positions_are_occupied,

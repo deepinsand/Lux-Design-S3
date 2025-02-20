@@ -11,8 +11,8 @@ class EnvParams:
 
     map_type: int = 1
     """Map generation algorithm. Can change between games"""
-    map_width: int = 8 # 24
-    map_height: int = 8 # 24
+    map_width: int = 16 # 24
+    map_height: int = 16 # 24
     num_teams: int = 2
     match_count_per_episode: int = 5
     """number of matches to play in one episode"""
@@ -22,7 +22,7 @@ class EnvParams:
 
 
     # configs for units
-    max_units: int = 2  # 16
+    max_units: int = 4  # 16
     init_unit_energy: int = 1000  # 100?
     min_unit_energy: int = 0
     max_unit_energy: int = 400
@@ -90,19 +90,35 @@ class EnvParams:
 
     # option to change sap configurations
 
-
 env_params_ranges = dict(
     # map_type=[1],
-    unit_move_cost=list(range(1, 6)),
-    unit_sensor_range=[1, 2, 3, 4],
-    nebula_tile_vision_reduction=list(range(0, 8)),
-    nebula_tile_energy_reduction=[0, 1, 2, 3, 5, 25],
-    unit_sap_cost=list(range(30, 51)),
-    unit_sap_range=list(range(3, 8)),
-    unit_sap_dropoff_factor=[0.25, 0.5, 1],
-    unit_energy_void_factor=[0.0625, 0.125, 0.25, 0.375],
+    unit_move_cost=list(range(1, 2)),
+    unit_sensor_range=[2],
+    nebula_tile_vision_reduction=list(range(1, 2)),
+    nebula_tile_energy_reduction=[1],
+    unit_sap_cost=list(range(30, 31)),
+    unit_sap_range=list(range(3, 4)),
+    unit_sap_dropoff_factor=[0.25],
+    unit_energy_void_factor=[0.0625],
     # map randomizations
-    nebula_tile_drift_speed=[-0.15, -0.1, -0.05, -0.025, 0.025, 0.05, 0.1, 0.15],
-    energy_node_drift_speed=[0.01, 0.02, 0.03, 0.04, 0.05],
-    energy_node_drift_magnitude=list(range(3, 6)),
+    nebula_tile_drift_speed=[-0.15],
+    energy_node_drift_speed=[0.01],
+    energy_node_drift_magnitude=list(range(3, 4)),
 )
+
+
+# env_params_ranges = dict(
+#     # map_type=[1],
+#     unit_move_cost=list(range(1, 6)),
+#     unit_sensor_range=[1, 2, 3, 4],
+#     nebula_tile_vision_reduction=list(range(0, 8)),
+#     nebula_tile_energy_reduction=[0, 1, 2, 3, 5, 25],
+#     unit_sap_cost=list(range(30, 51)),
+#     unit_sap_range=list(range(3, 8)),
+#     unit_sap_dropoff_factor=[0.25, 0.5, 1],
+#     unit_energy_void_factor=[0.0625, 0.125, 0.25, 0.375],
+#     # map randomizations
+#     nebula_tile_drift_speed=[-0.15, -0.1, -0.05, -0.025, 0.025, 0.05, 0.1, 0.15],
+#     energy_node_drift_speed=[0.01, 0.02, 0.03, 0.04, 0.05],
+#     energy_node_drift_magnitude=list(range(3, 6)),
+# )

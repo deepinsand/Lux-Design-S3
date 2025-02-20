@@ -23,7 +23,7 @@ config = {
     "LR": 2.5e-4,
     "NUM_ENVS": 1,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 5_000_000,
+    "TOTAL_TIMESTEPS": 400_000,
     "UPDATE_EPOCHS": 2,
     "NUM_MINIBATCHES": 2, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
@@ -41,16 +41,12 @@ config = {
 if __name__ == "__main__":
 
     rng = jax.random.PRNGKey(42)
-    # Setup the model architecture
-    rng, rng_init = jax.random.split(rng)
 
     env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
     wrapped_env = LuxaiS3GymnaxWrapper(env, "player_0")
 
-    rng = jax.random.PRNGKey(42)
-    rngs = jax.random.split(rng, 256)
-    
+
     log_dir = "logs"
 
     # Generate a unique subdirectory name using timestamp

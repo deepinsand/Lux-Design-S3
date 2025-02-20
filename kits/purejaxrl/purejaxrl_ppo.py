@@ -78,11 +78,11 @@ class EmbeddingEncoder(nn.Module):
     
         grid_embedding = jnp.concatenate(
             [
-                #tile_type_embeddings,
+                tile_type_embeddings,
                 unit_counts_map_reshaped,
-                #grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
+                grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
-                obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
+                #obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 grid_probability_of_being_energy_point_based_on_relic_positions_reshaped
             ],
@@ -109,28 +109,28 @@ class ActorCritic(nn.Module):
                 EmbeddingEncoder(),
                 nn.Conv(
                     self.features_dim,
-                    (2, 2),
+                    (1, 1),
                     padding="SAME",
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
-                # nn.relu,
-                #     nn.Conv(
-                #     self.features_dim,
-                #     (3, 3),
-                #     padding="SAME",
-                #     kernel_init=orthogonal(math.sqrt(2)),
-                # ),
-                # nn.relu,
-                #     nn.Conv(
-                #     self.features_dim,
-                #     (3, 3),
-                #     padding="SAME",
-                #     kernel_init=orthogonal(math.sqrt(2)),
-                # ),
-                # nn.relu,
+                nn.relu,
+                    nn.Conv(
+                    self.features_dim,
+                    (3, 3),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
+                nn.relu,
+                    nn.Conv(
+                    self.features_dim,
+                    (5, 5),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
+                nn.relu,
 
-                ResNetBlock(features=self.features_dim),
-                ResNetBlock(features=self.features_dim),
+                # ResNetBlock(features=self.features_dim),
+                # ResNetBlock(features=self.features_dim),
             ]
         )
 
