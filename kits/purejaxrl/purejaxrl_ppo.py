@@ -10,12 +10,11 @@ from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
 import gymnax
-from packages.purejaxrl.purejaxrl.wrappers import LogWrapper
 import math
 from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
 import functools
 from luxai_s3.params import EnvParams
-from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward
+from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward, LogWrapper
 
 # Re-use the ResNet block and convolutional encoder from before.
 class ResNetBlock(nn.Module):
@@ -74,23 +73,25 @@ class EmbeddingEncoder(nn.Module):
     @nn.compact
     def __call__(self, obs):
         # 3 tiles types, empty, nebula, asteriod, and -1 for unknwon
-        tile_type_embeder = nn.Embed(4, self.map_tile_emb_dim, jnp.float32) # B x ENV x w x h x map_tile_emb_dim
-
-        # Encode each cardinal unit into an embedding
-        tile_type_embeddings = tile_type_embeder(obs.tile_type) # (B, ENV, w, h, 4)
-        unit_counts_map_reshaped = obs.unit_counts_player_0[..., jnp.newaxis] # (B, ENV, w, h, 1)
-        grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped = obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis] # (B, ENV, w, h, 1)
-        grid_probability_of_being_energy_point_based_on_relic_positions_reshaped = obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis] # (B, ENV, w, h, 1)
+        tile_type_embeder = nn.Embed(4, self.map_tile_emb_dim + 1, jnp.float32) # B x ENV x w x h x map_tile_emb_dim
+        tile_type_embeddings =  tile_type_embeder(obs.tile_type)
     
+        
+        normalized_steps_reshaped = jnp.array(obs.normalized_steps)
+        normalized_steps_reshaped =  jnp.reshape(normalized_steps_reshaped, normalized_steps_reshaped.shape + (1,1,1)) # (B, Env) -> # (Env, 1,1,1)
+        normalized_steps_reshaped = jnp.tile(normalized_steps_reshaped, reps=(1,) + tile_type_embeddings.shape[-3:-1] + (1,))  # (B, Env, w,h,1)
+
+
         grid_embedding = jnp.concatenate(
             [
                 tile_type_embeddings,
-                unit_counts_map_reshaped,
-                grid_probability_of_being_an_energy_point_based_on_no_reward_reshaped,
+                normalized_steps_reshaped,
+                obs.unit_counts_player_0[..., jnp.newaxis],
+                obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis],
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 #obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
-                grid_probability_of_being_energy_point_based_on_relic_positions_reshaped
+                obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis]
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
@@ -249,6 +250,7 @@ def make_train(config, writer, env=None, env_params=None):
             tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
             unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
             unit_mask_player_0=fill_zeroes((env_params.max_units,)),
+            normalized_steps=fill_zeroes((), dtype=jnp.float32),
             grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),

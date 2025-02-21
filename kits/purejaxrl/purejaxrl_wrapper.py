@@ -64,6 +64,7 @@ class WrappedEnvObs:
     unit_counts_player_0: chex.Array
     unit_positions_player_0: chex.Array
     unit_mask_player_0: chex.Array
+    normalized_steps: float
     grid_probability_of_being_energy_point_based_on_relic_positions: chex.Array
     grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
     grid_max_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
@@ -158,14 +159,15 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         else:
             prev_stateful_data = wrapped_state.stateful_data
 
-        obs, stateful_data = self.transform_obs(obs[self.player], prev_stateful_data, params)
+        new_obs, stateful_data = self.transform_obs(obs[self.player], prev_stateful_data, params)
 
-        manufactured_reward = self.extract_differece_points_player_0(stateful_data, prev_stateful_data)
+        info["real_reward"] = self.extract_differece_points_player_0(stateful_data, prev_stateful_data)
+        manufactured_reward = self.extract_manufactured_reward(stateful_data, prev_stateful_data, obs[self.player])
 
         #jax.debug.print("team_points: {}, reward: {}, cond: {}", state.team_points, manufactured_reward, jnp.any(state.team_points))
         #debuggable_conditional_breakpoint(jnp.any(state.team_points))
 
-        return obs, WrappedEnvState(original_state=state, stateful_data=stateful_data), manufactured_reward, done, info
+        return new_obs, WrappedEnvState(original_state=state, stateful_data=stateful_data), manufactured_reward, done, info
     
     def compute_counts_map(self, position, mask):
         unit_counts_map = jnp.zeros(
@@ -235,6 +237,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         num_relics_discovered = discovered_relic_nodes_mask.sum()
 
         # state.py:348 shows spawn schedule.  2 spawn 0.50 with 100%, 2 spawn 100-150 with 66%, 2 spawn 200-250 with 33%
+        normalized_steps =  obs.steps / float(self.fixed_env_params.max_steps_in_episode + self.fixed_env_params.match_count_per_episode)
         spawn_steps = obs.steps // (self.fixed_env_params.max_steps_in_match // 2)
         max_relics = jnp.min(jnp.array([(1 + (obs.steps // self.fixed_env_params.max_steps_in_match)) * 2, self.fixed_env_params.max_relic_nodes]))
         num_relics_undiscovered = max_relics - num_relics_discovered
@@ -388,6 +391,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             tile_type=jnp.array(obs.map_features.tile_type),
             unit_positions_player_0=unit_positions,
             unit_mask_player_0=unit_mask,
+            normalized_steps=normalized_steps,
             grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
@@ -436,6 +440,32 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_points_player_0 = jax.lax.cond(
             jnp.any(diff_wins),
             lambda: 0,#jnp.dot(diff_wins, jnp.array([1,0])),
+            lambda: jnp.dot(diff_points, jnp.array([1,0]))
+        )
+
+        return diff_points_player_0
+    
+    
+    def extract_manufactured_reward(self, new_state, old_state, obs):
+        
+
+        new_team_points = jnp.array(new_state.team_points)
+        new_team_wins = jnp.array(new_state.team_wins)
+
+        old_team_points = jnp.array(old_state.team_points)
+        old_team_wins = jnp.array(old_state.team_wins)
+
+        diff_points = new_team_points - old_team_points
+        diff_wins = new_team_wins - old_team_wins
+
+        match = new_team_wins.sum()
+
+        # On steps mod 101, the points are wiped out but the wins change.
+        # On this step, we do a manufactured reward of point diff times 100.  This is because we want to incentivize gathering enough
+        # points to win a match.  
+        diff_points_player_0 = jax.lax.cond(
+            jnp.any(diff_wins),
+            lambda: 0,
             lambda: jnp.dot(diff_points, jnp.array([1,0]))
         )
 
@@ -496,3 +526,59 @@ class NormalizeVecReward(GymnaxWrapper):
             env_state=env_state,
         )
         return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
+
+
+
+@struct.dataclass
+class LogEnvState:
+    env_state: environment.EnvState
+    episode_returns: float
+    episode_lengths: int
+    returned_episode_returns: float
+    returned_episode_lengths: int
+    timestep: int
+
+
+class LogWrapper(GymnaxWrapper):
+    """Log the episode returns and lengths."""
+
+    def __init__(self, env: environment.Environment):
+        super().__init__(env)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+    ) -> Tuple[chex.Array, environment.EnvState]:
+        obs, env_state = self._env.reset(key, params)
+        state = LogEnvState(env_state, 0, 0, 0, 0, 0)
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state: environment.EnvState,
+        action: Union[int, float],
+        params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, env_state, reward, done, info = self._env.step(
+            key, state.env_state, action, params
+        )
+        real_reward = info["real_reward"]
+        new_episode_return = state.episode_returns + real_reward
+        new_episode_length = state.episode_lengths + 1
+        state = LogEnvState(
+            env_state=env_state,
+            episode_returns=new_episode_return * (1 - done),
+            episode_lengths=new_episode_length * (1 - done),
+            returned_episode_returns=state.returned_episode_returns * (1 - done)
+            + new_episode_return * done,
+            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
+            + new_episode_length * done,
+            timestep=state.timestep + 1,
+        )
+        info["returned_episode_returns"] = state.returned_episode_returns
+        info["returned_episode_lengths"] = state.returned_episode_lengths
+        info["timestep"] = state.timestep
+        info["returned_episode"] = done
+        return obs, state, reward, done, info
