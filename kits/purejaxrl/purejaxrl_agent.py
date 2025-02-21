@@ -54,8 +54,8 @@ class Agent():
         env_cfg = EnvParams(**env_cfg)
         self.env_cfg = env_cfg
         underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_cfg)
-        self.env = LuxaiS3GymnaxWrapper(underlying_env, "player_0")
-     
+        self.env = LuxaiS3GymnaxWrapper(underlying_env, player)
+        self.player = player
         # 3. Load the model
 
         t0 = time.time()
@@ -68,6 +68,11 @@ class Agent():
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
+        actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
+
+        if self.player != "player_0":
+            return actions, None, None, None
+        
         t0 = time.time()
 
         env_obs = dacite.from_dict(data_class=EnvObs, data=obs)
@@ -81,10 +86,9 @@ class Agent():
         new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
 
         pi, v = self.model.apply({'params': self.model_params}, new_obs_with_new_axis)
-        action = pi.sample(seed=rng_act)
+        action = pi.sample(seed=rng_act).block_until_ready()
         #print(f"apply_and_sample: {time.time() - t0:.2f} s")
         
-        actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
         actions[:, 0] = np.array(action)
         #print(f"turn to np: {time.time() - t0:.2f} s")
 

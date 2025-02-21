@@ -20,15 +20,21 @@ from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward
 # Re-use the ResNet block and convolutional encoder from before.
 class ResNetBlock(nn.Module):
     features: int
+    activation: str = "tanh"
 
     @nn.compact
     def __call__(self, x):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+    
         residual = x
-        x = nn.relu(x)
+        x = activation(x)
         x = nn.Conv(self.features, kernel_size=(3, 3), padding='SAME',
                     kernel_init=orthogonal(math.sqrt(2))
                 )(x)
-        x = nn.relu(x)
+        x = activation(x)
         x = nn.Conv(self.features, kernel_size=(5, 5), padding='SAME',
                     kernel_init=orthogonal(math.sqrt(2))
                 )(x)        
@@ -103,51 +109,55 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
-           
-        grid_encoder = nn.Sequential(
+
+        grid_embeddings = EmbeddingEncoder()(x)
+        convolutions = nn.Sequential(
             [
-                EmbeddingEncoder(),
                 nn.Conv(
-                    self.features_dim,
-                    (1, 1),
+                    16,
+                    (2, 2),
                     padding="SAME",
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
-                nn.relu,
+                activation,
                     nn.Conv(
-                    self.features_dim,
+                    32,
                     (3, 3),
                     padding="SAME",
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
-                nn.relu,
+                activation,
                     nn.Conv(
-                    self.features_dim,
+                    32,
                     (5, 5),
                     padding="SAME",
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
-                nn.relu,
+                activation,
 
-                # ResNetBlock(features=self.features_dim),
-                # ResNetBlock(features=self.features_dim),
+                #ResNetBlock(features=self.features_dim, activation=self.activation),
+                #ResNetBlock(features=self.features_dim, activation=self.activation),
             ]
         )
 
-        grid_features = grid_encoder(x)
-        local_agent_features = SpatialFeatureExtractor()(grid_features, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
+        convoluted_features = convolutions(grid_embeddings)
+        local_agent_convoluted_features = SpatialFeatureExtractor()(convoluted_features, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
+        local_agent_embeddings = SpatialFeatureExtractor()(grid_embeddings, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
+
         num_agents = x.unit_mask_player_0.shape[-1]
 
         # ---- Global Branch ----
         # Compute a global context vector using a global average pooling over the spatial dims.
 
-        global_context = jnp.mean(grid_features, axis=(1,2))  # mb_size x features
+        global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
         global_context = jnp.reshape(global_context, global_context.shape[:-1] + (1,) + global_context.shape[-1:]) # mb_size x 1 x features
         global_context = jnp.tile(global_context, (num_agents, 1))
+
         local_agent_features = jnp.concatenate(
             [
-                local_agent_features,
                 x.unit_mask_player_0[..., jnp.newaxis],
+                local_agent_embeddings,
+                local_agent_convoluted_features,
                 global_context
             ],
             axis=-1, # Add the mask to understand if the agent is actually there
@@ -157,7 +167,7 @@ class ActorCritic(nn.Module):
 
 
         actor_mean = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(local_agent_features)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
@@ -178,11 +188,11 @@ class ActorCritic(nn.Module):
         critic = local_agent_features.reshape(local_agent_features.shape[:-2] + (-1,)) # flatten num_agents and features into one vector for value guess
         #critic = critic[jnp.newaxis, :] # add a leading dimenion
         critic = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(critic)
         critic = activation(critic)
         critic = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(critic)
         critic = activation(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
