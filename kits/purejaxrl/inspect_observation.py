@@ -19,7 +19,7 @@ if __name__ == "__main__":
     jnp.set_printoptions(linewidth=500, suppress=True, precision=4)
     
     underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=EnvParams())
-    env = LuxaiS3GymnaxWrapper(underlying_env, "player_0")
+    env = LuxaiS3GymnaxWrapper(underlying_env)
     
 
     with open("logs/obs.pkl", 'rb') as f: # Binary read mode for pickle
@@ -34,6 +34,6 @@ if __name__ == "__main__":
     state_step = state[step]
     new_obs_step = new_obs[343]
 
-    next_obs, next_env_state = env.transform_obs(original_obs_step, state_step, env.fixed_env_params)
+    next_obs, next_env_state = env.transform_obs(original_obs_step, state_step, env.fixed_env_params, 0, 1)
 
     print(next_obs)

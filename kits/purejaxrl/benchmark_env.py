@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # due to jax branching logic. It should be kept false and instead lax.scan followed by a reset after max episode steps should be used when possible since games
     # can't end early.
     env = LuxAIS3Env(auto_reset=False, fixed_env_params=EnvParams())
-    env = LuxaiS3GymnaxWrapper(env, "player_0")
+    env = LuxaiS3GymnaxWrapper(env)
 
 
     num_envs = args.num_envs

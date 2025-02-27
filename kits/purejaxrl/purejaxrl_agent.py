@@ -55,8 +55,12 @@ class Agent():
         env_cfg = EnvParams(**env_cfg)
         self.env_cfg = env_cfg
         underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_cfg)
-        self.env = LuxaiS3GymnaxWrapper(underlying_env, player)
+        self.env = LuxaiS3GymnaxWrapper(underlying_env)
         self.player = player
+        self.opp_player = "player_1" if self.player == "player_0" else "player_0"
+        self.team_id = 0 if self.player == "player_0" else 1
+        self.opp_team_id = 1 if self.team_id == 0 else 0
+
         # 3. Load the model
 
         t0 = time.time()
@@ -70,16 +74,13 @@ class Agent():
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
-
-        if self.player != "player_0":
-            return actions, None, None, None
         
         t0 = time.time()
 
         env_obs = dacite.from_dict(data_class=EnvObs, data=obs)
         #print(f"dacite.from_dict: {time.time() - t0:.2f} s")
 
-        new_obs, self.env_state = self.env.transform_obs(env_obs, self.env_state, self.env_cfg)
+        new_obs, self.env_state = self.env.transform_obs(env_obs, self.env_state, self.env_cfg, self.team_id, self.opp_team_id)
         #print(f"transform_obs: {time.time() - t0:.2f} s")
 
         self.rng, rng_act = jax.random.split(self.rng)

@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
     env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
-    wrapped_env = LuxaiS3GymnaxWrapper(env, "player_0")
+    wrapped_env = LuxaiS3GymnaxWrapper(env)
 
 
     log_dir = "logs"

@@ -87,17 +87,15 @@ class StatefulEnvState:
 @struct.dataclass
 class WrappedEnvState:
     original_state: EnvState
-    stateful_data: StatefulEnvState
+    stateful_data_0: StatefulEnvState
+    stateful_data_1: StatefulEnvState
 
 class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     """Flatten the observations of the environment."""
 
-    def __init__(self, env: environment.Environment, player: str):
+    def __init__(self, env: environment.Environment):
         super().__init__(env)
-        self.player = player
-        self.opp_player = "player_1" if self.player == "player_0" else "player_0"
-        self.team_id = 0 if self.player == "player_0" else 1
-        self.opp_team_id = 1 if self.team_id == 0 else 0
+
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
         return None # this is deeply coupled into train later
@@ -131,8 +129,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     #@partial(jax.jit, static_argnums=(0,))
     def reset(self, key, params=None):
         obs, state = self._env.reset(key, params)
-        obs, stateful_data = self.transform_obs(obs[self.player], self.empty_stateful_env_state(), params)
-        return obs, WrappedEnvState(original_state=state, stateful_data=stateful_data)
+        obs_0, stateful_data_0 = self.transform_obs(obs["player_0"], self.empty_stateful_env_state(), params, 0, 1)
+        obs_1, stateful_data_1 = self.transform_obs(obs["player_1"], self.empty_stateful_env_state(), params, 1, 0)
+        return (obs_0, obs_1), WrappedEnvState(original_state=state, stateful_data_0=stateful_data_0, stateful_data_1=stateful_data_1)
     
     
 
@@ -140,34 +139,47 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, key, wrapped_state, action, params=None):
 
-        single_player_lux_action = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
-        single_player_lux_action = single_player_lux_action.at[:, 0].set(action)
+        no_sap_action_0 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
+        no_sap_action_0 = no_sap_action_0.at[:, 0].set(action[0])
+
+        no_sap_action_1 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
+        no_sap_action_1 = no_sap_action_1.at[:, 0].set(action[1])
+
         lux_action = {
-            "player_0": single_player_lux_action, 
-            "player_1": jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
+            "player_0": no_sap_action_0, 
+            "player_1": no_sap_action_1
         }
         
         obs, state, reward, terminated, truncated, info = self._env.step(key, wrapped_state.original_state, lux_action, params)
-        done = terminated[self.player] | truncated[self.player]
+        done = terminated["player_0"] | truncated["player_0"] | terminated["player_1"] | truncated["player_1"] # i dont think this happens
 
         if self._env.auto_reset:
-            prev_stateful_data = jax.lax.cond(
+            prev_stateful_data_0 = jax.lax.cond(
                 done,
                 lambda: self.empty_stateful_env_state(),
-                lambda: wrapped_state.stateful_data
+                lambda: wrapped_state.stateful_data_0
+            )
+            prev_stateful_data_1 = jax.lax.cond(
+                done,
+                lambda: self.empty_stateful_env_state(),
+                lambda: wrapped_state.stateful_data_1
             )
         else:
-            prev_stateful_data = wrapped_state.stateful_data
+            prev_stateful_data_0 = wrapped_state.stateful_data_0
+            prev_stateful_data_1 = wrapped_state.stateful_data_1
 
-        new_obs, stateful_data = self.transform_obs(obs[self.player], prev_stateful_data, params)
+        new_obs_0, stateful_data_0 = self.transform_obs(obs["player_0"], prev_stateful_data_0, params, 0, 1)
+        new_obs_1, stateful_data_1 = self.transform_obs(obs["player_1"], prev_stateful_data_1, params, 1, 0)
 
-        info["real_reward"] = self.extract_differece_points_player_0(stateful_data, prev_stateful_data)
-        manufactured_reward = self.extract_manufactured_reward(stateful_data, prev_stateful_data, obs[self.player])
+        info["real_reward"] = self.extract_differece_points_for_player(stateful_data_0, prev_stateful_data_0, 0)
+
+        manufactured_reward_0 = self.extract_manufactured_reward(stateful_data_0, prev_stateful_data_0, 0)
+        manufactured_reward_1 = self.extract_manufactured_reward(stateful_data_1, prev_stateful_data_1, 1)
 
         #jax.debug.print("team_points: {}, reward: {}, cond: {}", state.team_points, manufactured_reward, jnp.any(state.team_points))
         #debuggable_conditional_breakpoint(jnp.any(state.team_points))
 
-        return new_obs, WrappedEnvState(original_state=state, stateful_data=stateful_data), manufactured_reward, done, info
+        return (new_obs_0, new_obs_1), WrappedEnvState(original_state=state, stateful_data_0=stateful_data_0, stateful_data_1=stateful_data_1), (manufactured_reward_0, manufactured_reward_1), done, info
     
     def compute_counts_map(self, position, mask):
         unit_counts_map = jnp.zeros(
@@ -226,7 +238,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
     
     @partial(jax.jit, static_argnums=(0,))
-    def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params):
+    def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params, team_id, opp_team_id):
         total_spaces = self.fixed_env_params.map_width * self.fixed_env_params.map_height
         observed_relic_node_positions = jnp.array(obs.relic_nodes) # shape (max_relic_nodes, 2)
         observed_relic_nodes_mask = jnp.array(obs.relic_nodes_mask) # shape (max_relic_nodes, )
@@ -312,18 +324,18 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         #       init: 1
         #       (1-(reward/total units)))^units_on_spot) * prev value
 
-        unit_mask = jnp.array(obs.units_mask[self.team_id]) # shape (max_units, )
-        unit_positions = jnp.array(obs.units.position[self.team_id]) # shape (max_units, 2)
+        unit_mask = jnp.array(obs.units_mask[team_id]) # shape (max_units, )
+        unit_positions = jnp.array(obs.units.position[team_id]) # shape (max_units, 2)
         #unit_energys = np.array(obs["units"]["energy"][self.team_id]) # shape (max_units, 1)
 
-        unit_counts_player_0 = self.compute_counts_map(unit_positions, unit_mask)
-        normalized_unit_counts_player_0 = unit_counts_player_0 / float(self.fixed_env_params.max_units)
-        last_diff_player_0_points = self.extract_differece_points_player_0(obs, state)
+        unit_counts = self.compute_counts_map(unit_positions, unit_mask)
+        normalized_unit_counts = unit_counts / float(self.fixed_env_params.max_units)
+        accumulated_points_last_round = self.extract_differece_points_for_player(obs, state, team_id)
 
         match_over = self.is_match_over(obs, state)
         
         # If there are no points, we need to do probability all relics being spawned
-        grid_unit_mask = jnp.clip(unit_counts_player_0, max=1)
+        grid_unit_mask = jnp.clip(unit_counts, max=1)
         inverse_grid_unit_mask = 1 - grid_unit_mask
 
 
@@ -333,7 +345,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # MAYBE: account for actual relic discovereies
         
         total_unique_positions_occupied = jnp.max(jnp.array([grid_unit_mask_float.sum(), 1.]))
-        probability_of_any_unit_being_on_energy_point = jax.lax.cond(match_over, lambda: 0., lambda: last_diff_player_0_points / total_unique_positions_occupied)
+        probability_of_any_unit_being_on_energy_point = jax.lax.cond(match_over, lambda: 0., lambda: accumulated_points_last_round / total_unique_positions_occupied)
         grid_probability_of_being_an_energy_point_based_on_this_turns_positions = (grid_unit_mask_float * probability_of_any_unit_being_on_energy_point)
 
         total_rewards_when_positions_are_occupied = state.total_rewards_when_positions_are_occupied + grid_probability_of_being_an_energy_point_based_on_this_turns_positions
@@ -346,7 +358,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         last_time_sure_no_energy_point = state.last_time_sure_no_energy_point * inverse_grid_unit_mask
         last_time_sure_no_energy_point = last_time_sure_no_energy_point + (grid_unit_mask * obs.steps)
         last_time_sure_no_energy_point = jax.lax.cond(
-            jnp.logical_or(last_diff_player_0_points, match_over), 
+            jnp.logical_or(accumulated_points_last_round, match_over), 
             lambda: state.last_time_sure_no_energy_point, 
             lambda: last_time_sure_no_energy_point
         )
@@ -370,7 +382,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
 
         grid_min_probability_of_being_an_energy_point_based_on_positive_rewards =  jax.lax.cond(
-            jnp.logical_or(jnp.logical_not(last_diff_player_0_points), match_over), 
+            jnp.logical_or(jnp.logical_not(accumulated_points_last_round), match_over), 
             lambda: state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
             lambda: jnp.min(jnp.array([state.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards, grid_probability_of_being_an_energy_point_based_on_this_turns_positions]), axis=0)
         )
@@ -387,7 +399,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         new_observation = WrappedEnvObs(
             relic_map=relic_map, # not used
-            unit_counts_player_0=normalized_unit_counts_player_0,
+            unit_counts_player_0=normalized_unit_counts,
             tile_type=jnp.array(obs.map_features.tile_type),
             unit_positions_player_0=unit_positions,
             unit_mask_player_0=unit_mask,
@@ -423,9 +435,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         return jnp.any(diff_wins)
     
-    def extract_differece_points_player_0(self, obs, old_state):
+    def extract_differece_points_for_player(self, obs, old_state, team_id):
         
-
         new_team_points = jnp.array(obs.team_points)
         new_team_wins = jnp.array(obs.team_wins)
 
@@ -435,19 +446,22 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_points = new_team_points - old_team_points
         diff_wins = new_team_wins - old_team_wins
 
+        point_dot_product = jnp.zeros(2, dtype=jnp.int16)
+        point_dot_product = point_dot_product.at[team_id].set(1)
+
+
         # On steps mod 101, the points are wiped out but the wins change.
         # when the wins change we have no idea how many points we collected that round, or if they mattered, so count them as 0 ...
-        diff_points_player_0 = jax.lax.cond(
+        diff_points_summed = jax.lax.cond(
             jnp.any(diff_wins),
-            lambda: 0,#jnp.dot(diff_wins, jnp.array([1,0])),
-            lambda: jnp.dot(diff_points, jnp.array([1,0]))
+            lambda: 0,
+            lambda: jnp.dot(diff_points, point_dot_product)
         )
 
-        return diff_points_player_0
+        return diff_points_summed
     
     
-    def extract_manufactured_reward(self, new_state, old_state, obs):
-        
+    def extract_manufactured_reward(self, new_state, old_state, team_id):
 
         new_team_points = jnp.array(new_state.team_points)
         new_team_wins = jnp.array(new_state.team_wins)
@@ -458,18 +472,20 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_points = new_team_points - old_team_points
         diff_wins = new_team_wins - old_team_wins
 
-        match = new_team_wins.sum()
+        #match = new_team_wins.sum()
+
+        # TODO: Subtract points from other team from your score
+        point_dot_product = jnp.zeros(2, dtype=jnp.int16)
+        point_dot_product = point_dot_product.at[team_id].set(1)
 
         # On steps mod 101, the points are wiped out but the wins change.
-        # On this step, we do a manufactured reward of point diff times 100.  This is because we want to incentivize gathering enough
-        # points to win a match.  
-        diff_points_player_0 = jax.lax.cond(
+        diff_points_summed = jax.lax.cond(
             jnp.any(diff_wins),
             lambda: 0,
-            lambda: jnp.dot(diff_points, jnp.array([1,0]))
+            lambda: jnp.dot(diff_points, point_dot_product)
         )
 
-        return diff_points_player_0
+        return diff_points_summed
     
 
 @struct.dataclass
@@ -499,10 +515,10 @@ class NormalizeVecReward(GymnaxWrapper):
         return obs, state
 
     def step(self, key, state, action, params=None):
-        obs, env_state, reward, done, info = self._env.step(
+        obs, env_state, (reward_0, reward_1), done, info = self._env.step(
             key, state.env_state, action, params
         )
-        return_val = state.return_val * self.gamma * (1 - done) + reward
+        return_val = state.return_val * self.gamma * (1 - done) + ((reward_0 + reward_1) / 2.)
 
         batch_mean = jnp.mean(return_val, axis=0)
         batch_var = jnp.var(return_val, axis=0)
@@ -525,7 +541,9 @@ class NormalizeVecReward(GymnaxWrapper):
             return_val=return_val,
             env_state=env_state,
         )
-        return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
+
+        divisor = jnp.sqrt(state.var + 1e-8)
+        return obs, state, (reward_0 / divisor, reward_1 / divisor), done, info
 
 
 

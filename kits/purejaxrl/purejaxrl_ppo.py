@@ -227,8 +227,10 @@ def make_train(config, writer, env=None, env_params=None):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
+
+    # Double mini batch sizes since we now have 2 obs per env step
     config["MINIBATCH_SIZE"] = (
-        config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+        2 * config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
     if env is None and env_params is None:
         env, env_params = gymnax.make(config["ENV_NAME"])
@@ -295,33 +297,47 @@ def make_train(config, writer, env=None, env_params=None):
         def _update_step(update_count, runner_state):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
-                train_state, env_state, last_obs, rng = runner_state
+                train_state, env_state, (last_obs_0, last_obs_1), rng = runner_state
+
 
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                pi, value = network.apply(train_state.params, last_obs)
-                action = pi.sample(seed=_rng)
-                log_prob = pi.log_prob(action)
+                pi_0, value_0 = network.apply(train_state.params, last_obs_0)
+                action_0 = pi_0.sample(seed=_rng)
+                log_prob_0 = pi_0.log_prob(action_0)
+
+                rng, _rng = jax.random.split(rng)
+                pi_1, value_1 = network.apply(train_state.params, last_obs_1)
+                action_1 = pi_1.sample(seed=_rng)
+                log_prob_1 = pi_1.log_prob(action_1)
+
+                action = (action_0, action_1)
+                
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-                obsv, env_state, reward, done, info = debuggable_vmap(
+                obsv, env_state, (reward_0, reward_1), done, info = debuggable_vmap(
                     env.step, in_axes=(0, 0, 0, None)
                 )(rng_step, env_state, action, env_params)
-                transition = Transition(
-                    done, action, value, reward, log_prob, last_obs, info
+
+                transition_0 = Transition(
+                    done, action_0, value_0, reward_0, log_prob_0, last_obs_0, info
+                )                
+                transition_1 = Transition(
+                    done, action_1, value_1, reward_1, log_prob_1, last_obs_1, info
                 )
                 runner_state = (train_state, env_state, obsv, rng)
-                return runner_state, transition
+                return runner_state, (transition_0, transition_1)
 
-            runner_state, traj_batch = jax.lax.scan(
+            runner_state, (traj_batch_0, traj_batch_1) = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
             )
 
             # CALCULATE ADVANTAGE
-            train_state, env_state, last_obs, rng = runner_state
-            _, last_val = network.apply(train_state.params, last_obs)
+            train_state, env_state, (last_obs_0, last_obs_1), rng = runner_state
+            _, last_val_0 = network.apply(train_state.params, last_obs_0)
+            _, last_val_1 = network.apply(train_state.params, last_obs_1)
 
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
@@ -347,7 +363,12 @@ def make_train(config, writer, env=None, env_params=None):
                 )
                 return advantages, advantages + traj_batch.value
 
-            advantages, targets = _calculate_gae(traj_batch, last_val)
+            advantages_0, targets_0 = _calculate_gae(traj_batch_0, last_val_0)
+            advantages_1, targets_1 = _calculate_gae(traj_batch_1, last_val_1)
+
+            advantages = jnp.concatenate([advantages_0, advantages_1])
+            targets = jnp.concatenate([targets_0, targets_1])
+            traj_batch = jax.tree.map(lambda x, y: jnp.concatenate([x, y]), traj_batch_0, traj_batch_1)
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):
@@ -411,8 +432,8 @@ def make_train(config, writer, env=None, env_params=None):
                 # Batching and Shuffling
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
                 assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                    batch_size == 2 * config["NUM_STEPS"] * config["NUM_ENVS"]
+                ), "batch size must be equal to number of steps * number of envs times number of teams"
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(
@@ -502,7 +523,7 @@ def make_train(config, writer, env=None, env_params=None):
                         print(f"global step={timesteps[t]}, episodic return={return_values[t]}")
                 jax.debug.callback(callback, metric)
 
-            runner_state = (train_state, env_state, last_obs, rng)
+            runner_state = (train_state, env_state, (last_obs_0, last_obs_1), rng)
             return runner_state
 
         rng, _rng = jax.random.split(rng)
