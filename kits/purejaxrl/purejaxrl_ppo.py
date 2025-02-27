@@ -103,6 +103,8 @@ class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
     features_dim: int = 16
+    quick: bool = False
+    
 
     @nn.compact
     def __call__(self, x):
@@ -121,14 +123,14 @@ class ActorCritic(nn.Module):
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
                 activation,
-                    nn.Conv(
+                nn.Conv(
                     32,
                     (3, 3),
                     padding="SAME",
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
                 activation,
-                    nn.Conv(
+                nn.Conv(
                     32,
                     (5, 5),
                     padding="SAME",
@@ -141,30 +143,38 @@ class ActorCritic(nn.Module):
             ]
         )
 
-        convoluted_features = convolutions(grid_embeddings)
-        local_agent_convoluted_features = SpatialFeatureExtractor()(convoluted_features, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
         local_agent_embeddings = SpatialFeatureExtractor()(grid_embeddings, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
 
-        num_agents = x.unit_mask_player_0.shape[-1]
+        if self.quick:
+            local_agent_features = jnp.concatenate(
+                [
+                    x.unit_mask_player_0[..., jnp.newaxis],
+                    local_agent_embeddings,
+                ],
+                axis=-1, # Add the mask to understand if the agent is actually there
+            )
+        else:
+            convoluted_features = convolutions(grid_embeddings)
+            local_agent_convoluted_features = SpatialFeatureExtractor()(convoluted_features, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
 
-        # ---- Global Branch ----
-        # Compute a global context vector using a global average pooling over the spatial dims.
+            # ---- Global Branch ----
+            # Compute a global context vector using a global average pooling over the spatial dims.
 
-        global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
-        global_context = jnp.reshape(global_context, global_context.shape[:-1] + (1,) + global_context.shape[-1:]) # mb_size x 1 x features
-        global_context = jnp.tile(global_context, (num_agents, 1))
+            num_agents = x.unit_mask_player_0.shape[-1]
 
-        local_agent_features = jnp.concatenate(
-            [
-                x.unit_mask_player_0[..., jnp.newaxis],
-                local_agent_embeddings,
-                local_agent_convoluted_features,
-                global_context
-            ],
-            axis=-1, # Add the mask to understand if the agent is actually there
-        )
-
-
+            global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
+            global_context = jnp.reshape(global_context, global_context.shape[:-1] + (1,) + global_context.shape[-1:]) # mb_size x 1 x features
+            global_context = jnp.tile(global_context, (num_agents, 1))
+            
+            local_agent_features = jnp.concatenate(
+                [
+                    x.unit_mask_player_0[..., jnp.newaxis],
+                    local_agent_embeddings,
+                    local_agent_convoluted_features,
+                    global_context
+                ],
+                axis=-1, # Add the mask to understand if the agent is actually there
+            )
 
 
         actor_mean = nn.Dense(
