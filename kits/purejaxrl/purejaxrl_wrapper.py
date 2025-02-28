@@ -60,6 +60,7 @@ class GymnaxWrapper(object):
 @struct.dataclass
 class WrappedEnvObs:
     tile_type: chex.Array
+    normalized_energy_field: chex.Array
     relic_map: chex.Array
     normalized_unit_counts: chex.Array
     normalized_unit_counts_opp: chex.Array
@@ -351,6 +352,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_energys_max_grid_opp = self.compute_map(unit_positions_opp, unit_energys_opp, jnp.max, jnp.int16)
         normalized_unit_energys_max_grid_opp = unit_energys_max_grid_opp.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
+        normalized_energy_field = obs.map_features.energy.astype(jnp.float32) / self.fixed_env_params.max_energy_per_tile
 
         match_over = self.is_match_over(obs, state)
         
@@ -424,6 +426,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             normalized_unit_energys_max_grid=normalized_unit_energys_max_grid,
             normalized_unit_energys_max_grid_opp=normalized_unit_energys_max_grid_opp,
             tile_type=jnp.array(obs.map_features.tile_type),
+            normalized_energy_field=normalized_energy_field,
             unit_positions=unit_positions,
             unit_mask=unit_mask,
             normalized_steps=normalized_steps,

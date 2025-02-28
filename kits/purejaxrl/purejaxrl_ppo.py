@@ -266,6 +266,7 @@ def make_train(config, writer, env=None, env_params=None):
             normalized_unit_energys_max_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             normalized_unit_energys_max_grid_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
+            normalized_energy_field=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             unit_positions=fill_zeroes((env_params.max_units, 2)),
             unit_mask=fill_zeroes((env_params.max_units,)),
             normalized_steps=fill_zeroes((), dtype=jnp.float32),

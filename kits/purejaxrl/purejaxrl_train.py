@@ -23,7 +23,7 @@ config = {
     "LR": 2.5e-4,
     "NUM_ENVS": 16,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 4_000_000,
+    "TOTAL_TIMESTEPS": 2_000_000,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 4, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.995,
