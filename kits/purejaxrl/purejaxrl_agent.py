@@ -8,7 +8,7 @@ import dacite
 from purejaxrl_ppo import ActorCritic
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
 from purejaxrl_train import config
-
+from functools import partial
 from luxai_s3.params import EnvParams
 from luxai_s3.state import EnvObs
 from luxai_s3.env import LuxAIS3Env
@@ -74,6 +74,17 @@ class Agent():
 
         self.env_state = self.env.empty_stateful_env_state()
 
+    @partial(jax.jit, static_argnums=(0,))
+    def get_action(self, env_state, env_obs, rng_act):
+        new_obs, env_state = self.env.transform_obs(env_obs, env_state, self.env_cfg, self.team_id, self.opp_team_id)
+        #print(f"transform_obs: {time.time() - t0:.2f} s")
+
+
+        new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
+
+        pi, v = self.model.apply({'params': self.model_params}, new_obs_with_new_axis)
+        action = pi.sample(seed=rng_act)
+        return (action, new_obs, env_state)
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
@@ -82,18 +93,14 @@ class Agent():
 
         env_obs = dacite.from_dict(data_class=EnvObs, data=obs)
         #print(f"dacite.from_dict: {time.time() - t0:.2f} s")
-
-        new_obs, self.env_state = self.env.transform_obs(env_obs, self.env_state, self.env_cfg, self.team_id, self.opp_team_id)
-        #print(f"transform_obs: {time.time() - t0:.2f} s")
-
         self.rng, rng_act = jax.random.split(self.rng)
 
-        new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
 
-        pi, v = self.model.apply({'params': self.model_params}, new_obs_with_new_axis)
-        action = pi.sample(seed=rng_act).block_until_ready()
+        
         #print(f"apply_and_sample: {time.time() - t0:.2f} s")
         
+        action, new_obs, self.env_state = jax.block_until_ready(self.get_action(self.env_state, env_obs, rng_act))
+
         actions[:, 0] = np.array(action)
         #print(f"turn to np: {time.time() - t0:.2f} s")
 
