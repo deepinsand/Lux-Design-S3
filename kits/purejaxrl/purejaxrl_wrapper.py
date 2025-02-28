@@ -61,9 +61,12 @@ class GymnaxWrapper(object):
 class WrappedEnvObs:
     tile_type: chex.Array
     relic_map: chex.Array
-    unit_counts_player_0: chex.Array
-    unit_positions_player_0: chex.Array
-    unit_mask_player_0: chex.Array
+    normalized_unit_counts: chex.Array
+    normalized_unit_counts_opp: chex.Array
+    normalized_unit_energys_max_grid: chex.Array
+    normalized_unit_energys_max_grid_opp: chex.Array
+    unit_positions: chex.Array
+    unit_mask: chex.Array
     normalized_steps: float
     grid_probability_of_being_energy_point_based_on_relic_positions: chex.Array
     grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
@@ -181,28 +184,32 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         return (new_obs_0, new_obs_1), WrappedEnvState(original_state=state, stateful_data_0=stateful_data_0, stateful_data_1=stateful_data_1), (manufactured_reward_0, manufactured_reward_1), done, info
     
-    def compute_counts_map(self, position, mask):
+
+    def compute_map(self, position, values, accumulator, dtype):
         unit_counts_map = jnp.zeros(
             (self.fixed_env_params.map_width, 
-             self.fixed_env_params.map_height), dtype=jnp.int16
+             self.fixed_env_params.map_height), dtype=dtype
         )
 
-        def update_unit_counts_map(unit_position, unit_mask, unit_counts_map):
-            mask = unit_mask
+        def update_unit_counts_map(unit_position, value, unit_counts_map):
             unit_counts_map = unit_counts_map.at[
                 unit_position[0], unit_position[1]
-            ].add(mask.astype(jnp.int16))
+            ].add(value)
             return unit_counts_map
 
-        unit_counts_map = jnp.sum(
+        unit_counts_map = accumulator(
                 debuggable_vmap(update_unit_counts_map, in_axes=(0, 0, None), out_axes=0)(
-                    position, mask, unit_counts_map
+                    position, values, unit_counts_map
                 ),
-                axis=0,
-                dtype=jnp.int16
+                axis=0
             )
         
         return unit_counts_map
+    
+
+    def compute_counts_map(self, position, mask):
+        partial_sum = partial(jnp.sum, dtype=jnp.int16)
+        return self.compute_map(position, mask.astype(jnp.int16), partial_sum, jnp.int16)
     
 
     def multiply_5x5_mask_log_conv(self, arr):
@@ -326,11 +333,24 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         unit_mask = jnp.array(obs.units_mask[team_id]) # shape (max_units, )
         unit_positions = jnp.array(obs.units.position[team_id]) # shape (max_units, 2)
-        #unit_energys = np.array(obs["units"]["energy"][self.team_id]) # shape (max_units, 1)
+        unit_energys = jnp.array(obs.units.energy[team_id]) # shape (max_units, 1)
+        unit_energys_max_grid = self.compute_map(unit_positions, unit_energys, jnp.max, jnp.int16)
+        normalized_unit_energys_max_grid = unit_energys_max_grid.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
         unit_counts = self.compute_counts_map(unit_positions, unit_mask)
         normalized_unit_counts = unit_counts / float(self.fixed_env_params.max_units)
         accumulated_points_last_round = self.extract_differece_points_for_player(obs, state, team_id)
+
+
+        unit_mask_opp = jnp.array(obs.units_mask[opp_team_id]) # shape (max_units, )
+        unit_positions_opp = jnp.array(obs.units.position[opp_team_id]) # shape (max_units, 2)
+        unit_counts_opp = self.compute_counts_map(unit_positions_opp, unit_mask_opp)
+        normalized_unit_counts_opp = unit_counts_opp / float(self.fixed_env_params.max_units)
+        accumulated_points_last_round_opp = self.extract_differece_points_for_player(obs, state, opp_team_id)
+        unit_energys_opp = jnp.array(obs.units.energy[opp_team_id]) # shape (max_units, 1)
+        unit_energys_max_grid_opp = self.compute_map(unit_positions_opp, unit_energys_opp, jnp.max, jnp.int16)
+        normalized_unit_energys_max_grid_opp = unit_energys_max_grid_opp.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
+
 
         match_over = self.is_match_over(obs, state)
         
@@ -399,10 +419,13 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         new_observation = WrappedEnvObs(
             relic_map=relic_map, # not used
-            unit_counts_player_0=normalized_unit_counts,
+            normalized_unit_counts=normalized_unit_counts,
+            normalized_unit_counts_opp=normalized_unit_counts_opp,
+            normalized_unit_energys_max_grid=normalized_unit_energys_max_grid,
+            normalized_unit_energys_max_grid_opp=normalized_unit_energys_max_grid_opp,
             tile_type=jnp.array(obs.map_features.tile_type),
-            unit_positions_player_0=unit_positions,
-            unit_mask_player_0=unit_mask,
+            unit_positions=unit_positions,
+            unit_mask=unit_mask,
             normalized_steps=normalized_steps,
             grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
@@ -475,7 +498,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         #match = new_team_wins.sum()
 
         # TODO: Subtract points from other team from your score
-        point_dot_product = jnp.zeros(2, dtype=jnp.int16)
+        point_dot_product = jnp.full(2, -1, dtype=jnp.int16)
         point_dot_product = point_dot_product.at[team_id].set(1)
 
         # On steps mod 101, the points are wiped out but the wins change.
@@ -518,7 +541,9 @@ class NormalizeVecReward(GymnaxWrapper):
         obs, env_state, (reward_0, reward_1), done, info = self._env.step(
             key, state.env_state, action, params
         )
-        return_val = state.return_val * self.gamma * (1 - done) + ((reward_0 + reward_1) / 2.)
+
+        reward_sum = jnp.absolute(jnp.array([reward_0, reward_1])).sum()
+        return_val = state.return_val * self.gamma * (1 - done) + (reward_sum / 2.)
 
         batch_mean = jnp.mean(return_val, axis=0)
         batch_var = jnp.var(return_val, axis=0)

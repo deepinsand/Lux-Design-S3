@@ -21,11 +21,11 @@ from flax.metrics import tensorboard
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 2,
+    "NUM_ENVS": 16,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 200_000,
-    "UPDATE_EPOCHS": 1,
-    "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
+    "TOTAL_TIMESTEPS": 4_000_000,
+    "UPDATE_EPOCHS": 4,
+    "NUM_MINIBATCHES": 4, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.995,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
@@ -76,7 +76,6 @@ if __name__ == "__main__":
 
     summary_writer.close()
     save_dir = "models"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     timestamped_filename = f"model_{timestamp}.pkl"
     timestamped_filepath = os.path.join(save_dir, timestamped_filename)
     latest_model_filepath = os.path.join(save_dir, "latest_model.pkl")

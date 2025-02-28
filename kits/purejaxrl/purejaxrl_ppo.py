@@ -86,7 +86,10 @@ class EmbeddingEncoder(nn.Module):
             [
                 tile_type_embeddings,
                 normalized_steps_reshaped,
-                obs.unit_counts_player_0[..., jnp.newaxis],
+                obs.normalized_unit_counts[..., jnp.newaxis],
+                obs.normalized_unit_counts_opp[..., jnp.newaxis],
+                obs.normalized_unit_energys_max_grid[..., jnp.newaxis],
+                obs.normalized_unit_energys_max_grid_opp[..., jnp.newaxis],
                 obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis],
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 #obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
@@ -143,24 +146,24 @@ class ActorCritic(nn.Module):
             ]
         )
 
-        local_agent_embeddings = SpatialFeatureExtractor()(grid_embeddings, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
+        local_agent_embeddings = SpatialFeatureExtractor()(grid_embeddings, x.unit_positions, x.unit_mask) # [mb_size  x num_agents, features]
 
         if self.quick:
             local_agent_features = jnp.concatenate(
                 [
-                    x.unit_mask_player_0[..., jnp.newaxis],
+                    x.unit_mask[..., jnp.newaxis],
                     local_agent_embeddings,
                 ],
                 axis=-1, # Add the mask to understand if the agent is actually there
             )
         else:
             convoluted_features = convolutions(grid_embeddings)
-            local_agent_convoluted_features = SpatialFeatureExtractor()(convoluted_features, x.unit_positions_player_0, x.unit_mask_player_0) # [mb_size  x num_agents, features]
+            local_agent_convoluted_features = SpatialFeatureExtractor()(convoluted_features, x.unit_positions, x.unit_mask) # [mb_size  x num_agents, features]
 
             # ---- Global Branch ----
             # Compute a global context vector using a global average pooling over the spatial dims.
 
-            num_agents = x.unit_mask_player_0.shape[-1]
+            num_agents = x.unit_mask.shape[-1]
 
             global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
             global_context = jnp.reshape(global_context, global_context.shape[:-1] + (1,) + global_context.shape[-1:]) # mb_size x 1 x features
@@ -168,7 +171,7 @@ class ActorCritic(nn.Module):
             
             local_agent_features = jnp.concatenate(
                 [
-                    x.unit_mask_player_0[..., jnp.newaxis],
+                    x.unit_mask[..., jnp.newaxis],
                     local_agent_embeddings,
                     local_agent_convoluted_features,
                     global_context
@@ -258,10 +261,13 @@ def make_train(config, writer, env=None, env_params=None):
     
         init_x = WrappedEnvObs(
             relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
-            unit_counts_player_0=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            normalized_unit_counts=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            normalized_unit_counts_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            normalized_unit_energys_max_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            normalized_unit_energys_max_grid_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
-            unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
-            unit_mask_player_0=fill_zeroes((env_params.max_units,)),
+            unit_positions=fill_zeroes((env_params.max_units, 2)),
+            unit_mask=fill_zeroes((env_params.max_units,)),
             normalized_steps=fill_zeroes((), dtype=jnp.float32),
             grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),

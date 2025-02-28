@@ -29,10 +29,13 @@ def load_model_for_inference(rng, network_cls, env, env_params):
     
     init_obs = WrappedEnvObs(
         relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
-        unit_counts_player_0=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_counts=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_counts_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_energys_max_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_energys_max_grid_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
-        unit_positions_player_0=fill_zeroes((env_params.max_units, 2)),
-        unit_mask_player_0=fill_zeroes((env_params.max_units,)),
+        unit_positions=fill_zeroes((env_params.max_units, 2)),
+        unit_mask=fill_zeroes((env_params.max_units,)),
         normalized_steps=fill_zeroes((), dtype=jnp.float32),
         grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
