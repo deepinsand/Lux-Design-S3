@@ -7,7 +7,7 @@ from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 
-from luxai_s3.params import EnvParams
+from luxai_s3.params import EnvParams, env_params_ranges
 from luxai_s3.state import (
     ASTEROID_TILE,
     ENERGY_NODE_FNS,
@@ -73,6 +73,7 @@ class WrappedEnvObs:
     grid_max_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
+    value_of_sapping_grid: chex.Array
 
 @struct.dataclass
 class StatefulEnvState:
@@ -86,12 +87,15 @@ class StatefulEnvState:
     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     total_rewards_when_positions_are_occupied: chex.Array
     total_times_positions_are_occupied: chex.Array
+    unit_positions_opp_last_round: chex.Array
+    candidate_sap_locations: chex.Array
 
 @struct.dataclass
 class WrappedEnvState:
     original_state: EnvState
     stateful_data_0: StatefulEnvState
     stateful_data_1: StatefulEnvState
+
 
 class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     """Flatten the observations of the environment."""
@@ -108,11 +112,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     
     @property
     def num_actions(self):
-        return self.fixed_env_params.max_units * 5
+        return self.fixed_env_params.max_units * 6
     
     def action_space(self, params: Optional[EnvParams] = None):
-        high = jnp.ones((self.fixed_env_params.max_units,)) * 5
-        return MultiDiscrete(high, 5)
+        high = jnp.ones((self.fixed_env_params.max_units,)) * 6
+        return MultiDiscrete(high, 6)
     
     def empty_stateful_env_state(self):
         empty_data = StatefulEnvState(
@@ -126,6 +130,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             total_times_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.int16), # start at 1 to avoid div 0
             team_wins=jnp.zeros(2, dtype=jnp.int32),
             team_points=jnp.zeros(2, dtype=jnp.int32),
+            unit_positions_opp_last_round=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int16),
+            candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
         )
         return empty_data
     
@@ -142,15 +148,17 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, key, wrapped_state, action, params=None):
 
-        no_sap_action_0 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
-        no_sap_action_0 = no_sap_action_0.at[:, 0].set(action[0])
-
-        no_sap_action_1 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
-        no_sap_action_1 = no_sap_action_1.at[:, 0].set(action[1])
+        sap_action_0 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
+        sap_action_0 = sap_action_0.at[:, 0].set(action[0])
+        sap_action_0 = sap_action_0.at[:, 1:3].set(wrapped_state.stateful_data_0.candidate_sap_locations)
+        
+        sap_action_1 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
+        sap_action_1 = sap_action_1.at[:, 0].set(action[1])
+        sap_action_1 = sap_action_1.at[:, 1:3].set(wrapped_state.stateful_data_1.candidate_sap_locations)
 
         lux_action = {
-            "player_0": no_sap_action_0, 
-            "player_1": no_sap_action_1
+            "player_0": sap_action_0, 
+            "player_1": sap_action_1
         }
         
         obs, state, reward, terminated, truncated, info = self._env.step(key, wrapped_state.original_state, lux_action, params)
@@ -205,14 +213,96 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             )
         
         return unit_counts_map
+
+    def compute_energy_map_max(self, position, mask, energies):
+        energies = energies * mask.astype(jnp.int16)
+        return self.compute_map(position, energies, jnp.max, jnp.int16)
+        
+    def compute_energy_map_sum(self, position, mask, energies):
+        partial_sum = partial(jnp.sum, dtype=jnp.int16)
+        energies = energies * mask.astype(jnp.int16)
+        return self.compute_map(position, energies, partial_sum, jnp.int16)
     
 
     def compute_counts_map(self, position, mask):
         partial_sum = partial(jnp.sum, dtype=jnp.int16)
         return self.compute_map(position, mask.astype(jnp.int16), partial_sum, jnp.int16)
+
+    def extract_values_from_map(self, map, positions, mask, default_value):
+
+        def extract_feature(pos, valid):
+            row, col = pos  # extract row and col indices
+            value = map[row, col]  # extract feature vector at that spatial location
+            # If the agent doesn't exist (valid == False), return zeros.
+            return jnp.where(valid, value, default_value)
+        # Vectorize over the num_agents dimension.
+        return debuggable_vmap(extract_feature)(positions, mask)
+        
+    def find_max_index_subsection(self, grid, pos, subsection_size):
+
+        half_subsection = subsection_size // 2
+        padding_size = half_subsection
+        padding = ((padding_size, padding_size), (padding_size, padding_size))
+        padded_grid = jnp.pad(grid, padding, mode='constant', constant_values=0)
+
+        center_x, center_y = pos
+        # Calculate start and end indices for rows and columns, handling edges
+        start_row = center_x - half_subsection + padding_size
+        start_col = center_y - half_subsection + padding_size
+
+        # Extract the subsection using lax.dynamic_slice
+        subsection = jax.lax.dynamic_slice(padded_grid, (start_row, start_col), (subsection_size, subsection_size))
+
+        # Find the index of the maximum value within the subsection (flattened)
+        max_index_flat = jnp.argmax(subsection)
+
+        # Convert the flattened index to 2D indices within the subsection
+        max_index_subsection = jnp.unravel_index(max_index_flat, subsection.shape)
+
+        # Adjust the subsection indices to get the indices in the original grid
+        max_row_index_original = start_row + max_index_subsection[0] - padding_size
+        max_col_index_original = start_col + max_index_subsection[1] - padding_size
+
+        return (max_row_index_original, max_col_index_original)
     
 
-    def multiply_5x5_mask_log_conv(self, arr):
+    def find_max_index_subsection_for_sap_ranges(self, grid, pos, subsection_size):
+        possible_sizes = env_params_ranges['unit_sap_range']
+        index = subsection_size - possible_sizes[0]
+
+        # Use jax.switch to select the correct branch based on subsection_size
+        return jax.lax.switch(
+            index,
+            [lambda g, p: self.find_max_index_subsection(g, p, ((size * 2) + 1)) for size in possible_sizes], # size is like radius here
+            grid, 
+            pos
+        )
+    
+
+    def convolution_for_sap_actions_3x3(self, arr, adjacent_value, direct_value, dtype):
+        mask_size = 3
+        kernel = jnp.full((mask_size, mask_size), fill_value=adjacent_value, dtype=dtype)
+        kernel = kernel.at[1, 1].set(direct_value)
+
+        # Perform convolution. "SAME" padding ensures output is same size as input.
+        # Feature group count and batch group count are both 1 for standard 2D convolution.
+        convolved_arr = jax.lax.conv_general_dilated(
+            lhs=arr.reshape(1, 1, arr.shape[0], arr.shape[1]), # Input in NCHW format (Batch=1, Channel=1)
+            rhs=kernel.reshape(1, 1, mask_size, mask_size),        # Kernel in OIHW format (OutputChannel=1, InputChannel=1)
+            window_strides=(1, 1),
+            padding="SAME",
+            lhs_dilation=(1, 1),
+            rhs_dilation=(1, 1),
+            dimension_numbers=jax.lax.ConvDimensionNumbers(
+                lhs_spec=(0, 1, 2, 3),  # NCHW: Batch, Channel, Height, Width
+                rhs_spec=(0, 1, 2, 3),  # OIHW: Output Channel, Input Channel, Kernel Height, Kernel Width
+                out_spec=(0, 1, 2, 3), # NCHW: Batch, Channel, Height, Width
+            )
+        ).reshape(arr.shape) # Reshape back to 2D
+
+        return convolved_arr    
+
+    def convolution_for_relic_nodes_5x5(self, arr):
         mask_size = 5
         kernel = jnp.ones((mask_size, mask_size), dtype=arr.dtype) # 5x5 kernel of ones
 
@@ -325,7 +415,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # 4) calculate probability of every space being an energy point
         #       # 5x5 covulution of 1-p of all spaces around it
         grid_probability_of_relic_not_spawned_and_contributing_to_energy_point_since_last_observation = (1. - grid_probability_of_relic_spawned_and_contributing_to_energy_point_since_last_observation)
-        grid_probability_of_being_energy_point_based_on_relic_positions = 1 - self.multiply_5x5_mask_log_conv(grid_probability_of_relic_not_spawned_and_contributing_to_energy_point_since_last_observation)
+        grid_probability_of_being_energy_point_based_on_relic_positions = 1 - self.convolution_for_relic_nodes_5x5(grid_probability_of_relic_not_spawned_and_contributing_to_energy_point_since_last_observation)
 
         # 5) calculate probabily of not being an energy point based on reward obs
         #       init: 1
@@ -334,29 +424,31 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_mask = jnp.array(obs.units_mask[team_id]) # shape (max_units, )
         unit_positions = jnp.array(obs.units.position[team_id]) # shape (max_units, 2)
         unit_energys = jnp.array(obs.units.energy[team_id]) # shape (max_units, 1)
-        unit_energys_max_grid = self.compute_map(unit_positions, unit_energys, jnp.max, jnp.int16)
+        unit_energys_max_grid = self.compute_energy_map_max(unit_positions, unit_mask, unit_energys) 
         normalized_unit_energys_max_grid = unit_energys_max_grid.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
         unit_counts = self.compute_counts_map(unit_positions, unit_mask)
+        grid_unit_mask = jnp.clip(unit_counts, max=1)
+        inverse_grid_unit_mask = 1 - grid_unit_mask
         normalized_unit_counts = unit_counts / float(self.fixed_env_params.max_units)
         accumulated_points_last_round = self.extract_differece_points_for_player(obs, state, team_id)
-
-
         unit_mask_opp = jnp.array(obs.units_mask[opp_team_id]) # shape (max_units, )
-        unit_positions_opp = jnp.array(obs.units.position[opp_team_id]) # shape (max_units, 2)
+        
+        unit_positions_opp = jnp.array(obs.units.position[opp_team_id]) # shape (max_units, 2)        
         unit_counts_opp = self.compute_counts_map(unit_positions_opp, unit_mask_opp)
         normalized_unit_counts_opp = unit_counts_opp / float(self.fixed_env_params.max_units)
         accumulated_points_last_round_opp = self.extract_differece_points_for_player(obs, state, opp_team_id)
         unit_energys_opp = jnp.array(obs.units.energy[opp_team_id]) # shape (max_units, 1)
-        unit_energys_max_grid_opp = self.compute_map(unit_positions_opp, unit_energys_opp, jnp.max, jnp.int16)
+        unit_energys_max_grid_opp = self.compute_energy_map_max(unit_positions_opp, unit_mask_opp, unit_energys_opp)
+
         normalized_unit_energys_max_grid_opp = unit_energys_max_grid_opp.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
+
 
 
         match_over = self.is_match_over(obs, state)
         
         # If there are no points, we need to do probability all relics being spawned
-        grid_unit_mask = jnp.clip(unit_counts, max=1)
-        inverse_grid_unit_mask = 1 - grid_unit_mask
+
 
 
         grid_unit_mask_float = grid_unit_mask.astype(jnp.float32)
@@ -415,7 +507,35 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         # TODO: account for units getting killed, check energy?
 
+        # Figure out sapping locations
+        unit_positions_opp_diff_last_round = unit_positions_opp - state.unit_positions_opp_last_round
+        unit_positions_opp_predicted = unit_positions_opp + unit_positions_opp_diff_last_round
+       
+       # TODO: account for units moving towards EP?
+        unit_positions_opp_predicted = jnp.clip(unit_positions_opp_predicted, min=0, max=self.fixed_env_params.map_width)
+        number_units_killed_direct_hit = (unit_energys_opp < params.unit_sap_cost) & unit_mask_opp
+        number_units_killed_direct_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_direct_hit)
 
+        number_units_killed_adjacent_hit = (unit_energys_opp < (params.unit_sap_cost * params.unit_sap_dropoff_factor)) & unit_mask_opp
+        number_units_killed_adjacent_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_adjacent_hit)
+        number_units_killed_adjacent_hit_summed_grid = self.convolution_for_sap_actions_3x3(number_units_killed_adjacent_hit_grid, 1, 0, jnp.int16)
+
+        potential_energy_taken_opp = jnp.clip(unit_energys_opp, max=params.unit_sap_cost, min=0)
+        unit_energy_potentially_taken_grid_opp = self.compute_energy_map_sum(unit_positions_opp, unit_mask_opp, potential_energy_taken_opp)
+        unit_energy_potentially_taken_sum_grid_opp = self.convolution_for_sap_actions_3x3(unit_energy_potentially_taken_grid_opp.astype(jnp.float32), params.unit_sap_dropoff_factor, 1, jnp.float32)
+        unit_energy_potentially_taken_sum_grid_opp_normalized = unit_energy_potentially_taken_sum_grid_opp / params.unit_sap_cost
+
+        # effectively killing a unit is 1 value, and reducing points is 1/params.unit_sap_cost value per point
+        value_of_sapping_grid = number_units_killed_adjacent_hit_summed_grid + number_units_killed_direct_hit_grid +  unit_energy_potentially_taken_sum_grid_opp_normalized
+
+        candidate_sap_locations_x, candidate_sap_locations_y = debuggable_vmap(self.find_max_index_subsection_for_sap_ranges, in_axes=(None, 0, None), out_axes=0)(
+            value_of_sapping_grid, unit_positions, params.unit_sap_range
+        )
+        candidate_sap_locations = jnp.column_stack((candidate_sap_locations_x, candidate_sap_locations_y))
+        candidate_sap_locations = candidate_sap_locations - unit_positions # relative to current position
+        #go through each unit
+        # mask the range they can sap
+        # find the higest point        
 
         new_observation = WrappedEnvObs(
             relic_map=relic_map, # not used
@@ -431,8 +551,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards,
-            grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward
-
+            grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
+            value_of_sapping_grid=value_of_sapping_grid,
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
@@ -444,7 +564,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
                                      total_rewards_when_positions_are_occupied=total_rewards_when_positions_are_occupied,
                                      total_times_positions_are_occupied=total_times_positions_are_occupied,
-                                     sensor_last_visit=sensor_last_visit
+                                     sensor_last_visit=sensor_last_visit,
+                                     unit_positions_opp_last_round=unit_positions_opp,
+                                     candidate_sap_locations=candidate_sap_locations,
                                      )
         
         return new_observation, new_state

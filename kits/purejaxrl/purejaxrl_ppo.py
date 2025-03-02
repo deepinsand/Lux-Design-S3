@@ -106,7 +106,7 @@ class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
     features_dim: int = 16
-    quick: bool = False
+    quick: bool = True
     
 
     @nn.compact
@@ -253,7 +253,7 @@ def make_train(config, writer, env=None, env_params=None):
         # INIT NETWORK
         action_space = env.action_space(env_params)
         network = ActorCritic(
-            [action_space.shape[0], action_space.n], activation=config["ACTIVATION"]
+            [action_space.shape[0], action_space.n], activation=config["ACTIVATION"], quick=(not config["CONVOLUTIONS"])
         )
         rng, _rng = jax.random.split(rng)
         def fill_zeroes(shape, dtype=jnp.int16):
@@ -274,6 +274,7 @@ def make_train(config, writer, env=None, env_params=None):
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         )
 
 

@@ -11,8 +11,8 @@ class EnvParams:
 
     map_type: int = 1
     """Map generation algorithm. Can change between games"""
-    map_width: int = 16 # 24
-    map_height: int = 16 # 24
+    map_width: int = 8 # 24
+    map_height: int = 8 # 24
     num_teams: int = 2
     match_count_per_episode: int = 5
     """number of matches to play in one episode"""
@@ -22,7 +22,7 @@ class EnvParams:
 
 
     # configs for units
-    max_units: int = 4  # 16
+    max_units: int = 3  # 16
     init_unit_energy: int = 100
     min_unit_energy: int = 0
     max_unit_energy: int = 400
@@ -97,7 +97,7 @@ env_params_ranges = dict(
     nebula_tile_vision_reduction=list(range(1, 2)),
     nebula_tile_energy_reduction=[1],
     unit_sap_cost=list(range(30, 31)),
-    unit_sap_range=list(range(3, 4)),
+    unit_sap_range=list(range(4, 5)),
     unit_sap_dropoff_factor=[0.25],
     unit_energy_void_factor=[0.0625],
     # map randomizations
