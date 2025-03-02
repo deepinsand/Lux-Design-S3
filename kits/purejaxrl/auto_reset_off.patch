@@ -1,0 +1,51 @@
+diff --git a/kits/purejaxrl/models/latest_model.pkl b/kits/purejaxrl/models/latest_model.pkl
+index 5770619..f1106ea 100644
+Binary files a/kits/purejaxrl/models/latest_model.pkl and b/kits/purejaxrl/models/latest_model.pkl differ
+diff --git a/kits/purejaxrl/purejaxrl_ppo.py b/kits/purejaxrl/purejaxrl_ppo.py
+index 8be5c5a..9684cf4 100644
+--- a/kits/purejaxrl/purejaxrl_ppo.py
++++ b/kits/purejaxrl/purejaxrl_ppo.py
+@@ -263,6 +263,13 @@ def make_train(config, writer, env=None, env_params=None):
+                 runner_state = (train_state, env_state, obsv, rng)
+                 return runner_state, transition
+ 
++            train_state, _, _, rng = runner_state
++
++            rng, _rng = jax.random.split(rng)
++            reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
++            obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
++
++            runner_state = (train_state, env_state, obsv, rng)
+             runner_state, traj_batch = jax.lax.scan(
+                 _env_step, runner_state, None, config["NUM_STEPS"]
+             )
+diff --git a/kits/purejaxrl/purejaxrl_train.py b/kits/purejaxrl/purejaxrl_train.py
+index 09b0e2e..5c25c76 100644
+--- a/kits/purejaxrl/purejaxrl_train.py
++++ b/kits/purejaxrl/purejaxrl_train.py
+@@ -18,11 +18,11 @@ from flax.metrics import tensorboard
+ 
+ config = {
+     "LR": 2.5e-4,
+-    "NUM_ENVS": 1,
+-    "NUM_STEPS": 128,
+-    "TOTAL_TIMESTEPS": 200_000,
+-    "UPDATE_EPOCHS": 1,
+-    "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
++    "NUM_ENVS": 2,
++    "NUM_STEPS": 505,
++    "TOTAL_TIMESTEPS": 500_000,
++    "UPDATE_EPOCHS": 2,
++    "NUM_MINIBATCHES": 2, # must be less than num_envs since RNN shuffles environemnts
+     "GAMMA": 0.99,
+     "GAE_LAMBDA": 0.95,
+     "CLIP_EPS": 0.2,
+@@ -42,7 +42,7 @@ if __name__ == "__main__":
+     rng, rng_init = jax.random.split(rng)
+ 
+     env_params = EnvParams()
+-    env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
++    env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_params)
+     wrapped_env = LuxaiS3GymnaxWrapper(env, "player_0")
+ 
+     rng = jax.random.PRNGKey(42)
