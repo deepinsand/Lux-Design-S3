@@ -21,7 +21,7 @@ def load_model_for_inference(rng, network_cls, env, env_params):
 
     action_space = env.action_space(env_params)
     network = network_cls(
-        [action_space.shape[0], action_space.n]
+        [action_space.shape[0], action_space.n], activation=config["ACTIVATION"], quick=(not config["CONVOLUTIONS"])
     )
 
     def fill_zeroes(shape, dtype=jnp.int16):
@@ -43,6 +43,7 @@ def load_model_for_inference(rng, network_cls, env, env_params):
         grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
 
     )
 
@@ -103,6 +104,6 @@ class Agent():
         action, new_obs, self.env_state = jax.block_until_ready(self.get_action(self.env_state, env_obs, rng_act))
 
         actions[:, 0] = np.array(action)
-        #print(f"turn to np: {time.time() - t0:.2f} s")
+        actions[:, 1:3] = np.array(self.env_state.candidate_sap_locations)
 
         return actions, new_obs, env_obs, self.env_state

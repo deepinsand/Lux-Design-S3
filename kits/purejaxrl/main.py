@@ -17,6 +17,7 @@ import pickle
 all_new_obs = []
 all_env_states = []
 all_orignal_obs = []
+all_actions = []
 
 def agent_fn(observation, configurations):
     """
@@ -45,9 +46,10 @@ def agent_fn(observation, configurations):
         all_new_obs.append(new_obs)
         all_env_states.append(env_state)
         all_orignal_obs.append(orignal_obs)
+        all_actions.append(actions)
         if step == 504:
             with open("logs/obs.pkl", 'wb') as f: # Binary write mode for pickle
-                pickle.dump({"new_obs": all_new_obs, "state": all_env_states, "original_obs": all_orignal_obs}, f) # Directly pickle train_state.params
+                pickle.dump({"new_obs": all_new_obs, "state": all_env_states, "original_obs": all_orignal_obs, "actions": all_actions}, f) # Directly pickle train_state.params
             print(f"New observations for player 0saved to (pickle): logs/obs.pkl")
     return dict(action=actions.tolist())
 

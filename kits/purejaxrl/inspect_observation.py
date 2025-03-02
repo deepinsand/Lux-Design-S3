@@ -25,15 +25,17 @@ if __name__ == "__main__":
     with open("logs/obs.pkl", 'rb') as f: # Binary read mode for pickle
         file = pickle.load(f) # Load parameters directly using pickle.load
 
-    new_obs = file["new_obs"]
-    original_obs = file["original_obs"]
-    state = file["state"]
+    all_new_obs = file["new_obs"]
+    all_original_obs = file["original_obs"]
+    all_state = file["state"]
+    all_action = file["actions"]
 
-    step = 300
-    original_obs_step = original_obs[step]
-    state_step = state[step]
-    new_obs_step = new_obs[step]
+    step = 68
+    original_obs = all_original_obs[step]
+    state = all_state[step]
+    new_obs = all_new_obs[step]
+    action = all_action[step]
 
-    next_obs, next_env_state = env.transform_obs(original_obs_step, state_step, env.fixed_env_params, 0, 1)
+    next_obs, next_env_state = env.transform_obs(original_obs, state, env.fixed_env_params, 0, 1)
 
     print(next_obs)
