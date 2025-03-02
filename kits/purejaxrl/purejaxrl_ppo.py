@@ -94,7 +94,8 @@ class EmbeddingEncoder(nn.Module):
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 #obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
-                obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis]
+                obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis],
+                obs.value_of_sapping_grid[..., jnp.newaxis],
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels

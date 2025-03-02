@@ -520,15 +520,16 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         number_units_killed_adjacent_hit = (unit_energys_opp < (params.unit_sap_cost * params.unit_sap_dropoff_factor)) & unit_mask_opp
         number_units_killed_adjacent_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_adjacent_hit)
-        number_units_killed_adjacent_hit_summed_grid = self.convolution_for_sap_actions_3x3(number_units_killed_adjacent_hit_grid, 1, 0, jnp.int16)
+        number_units_killed_adjacent_hit_summed_grid = self.convolution_for_sap_actions_3x3(number_units_killed_adjacent_hit_grid.astype(jnp.float32), 1, 0, jnp.float32) #conv on nvidia must be float32?
 
         potential_energy_taken_opp = jnp.clip(unit_energys_opp, max=params.unit_sap_cost, min=0)
-        unit_energy_potentially_taken_grid_opp = self.compute_energy_map_sum(unit_positions_opp, unit_mask_opp, potential_energy_taken_opp)
-        unit_energy_potentially_taken_sum_grid_opp = self.convolution_for_sap_actions_3x3(unit_energy_potentially_taken_grid_opp.astype(jnp.float32), params.unit_sap_dropoff_factor, 1, jnp.float32)
+        unit_energy_potentially_taken_grid_opp = self.compute_energy_map_sum(unit_positions_opp_predicted, unit_mask_opp, potential_energy_taken_opp)
+        unit_energy_potentially_taken_sum_grid_opp = self.convolution_for_sap_actions_3x3(unit_energy_potentially_taken_grid_opp.astype(jnp.float32), params.unit_sap_dropoff_factor, 1., jnp.float32)
         unit_energy_potentially_taken_sum_grid_opp_normalized = unit_energy_potentially_taken_sum_grid_opp / params.unit_sap_cost
 
         # effectively killing a unit is 1 value, and reducing points is 1/params.unit_sap_cost value per point
-        value_of_sapping_grid = number_units_killed_adjacent_hit_summed_grid + number_units_killed_direct_hit_grid +  unit_energy_potentially_taken_sum_grid_opp_normalized
+        # todo: normalize
+        value_of_sapping_grid = number_units_killed_adjacent_hit_summed_grid + number_units_killed_direct_hit_grid +  unit_energy_potentially_taken_sum_grid_opp_normalized / 9.
 
         candidate_sap_locations_x, candidate_sap_locations_y = debuggable_vmap(self.find_max_index_subsection_for_sap_ranges, in_axes=(None, 0, None), out_axes=0)(
             value_of_sapping_grid, unit_positions, params.unit_sap_range
