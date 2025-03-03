@@ -306,12 +306,12 @@ def make_train(config, writer, env=None, env_params=None):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-        obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
+        obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params) # this is thrown away immediately since env is reset in mod 0
 
         # TRAIN LOOP
         def _update_step(update_count, runner_state):
             
-            train_state, old_env_state, _, rng = runner_state
+            train_state, old_env_state, old_obsv, rng = runner_state
 
             # sample random params initially
             def sample_params(rng_key):
@@ -330,7 +330,10 @@ def make_train(config, writer, env=None, env_params=None):
 
             rng, _rng = jax.random.split(rng)
             reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-            obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, 0, 0))(reset_rng, env_params, old_env_state) # pass in old_env_state for log and normalize state
+            reset_obsv, reset_env_state = debuggable_vmap(env.reset, in_axes=(0, 0, 0))(reset_rng, env_params, old_env_state) # pass in old_env_state for log and normalize state
+
+            # the num_steps should be 101, so we hardcode 5 matches here.  shorter trajectories should mean faster training
+            obsv, env_state = jax.lax.cond(update_count % 5 == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
 
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
