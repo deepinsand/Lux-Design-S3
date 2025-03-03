@@ -13,7 +13,7 @@ import gymnax
 import math
 from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
 import functools
-from luxai_s3.params import EnvParams
+from luxai_s3.params import EnvParams, env_params_ranges
 from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward, LogWrapper
 
 # Re-use the ResNet block and convolutional encoder from before.
@@ -78,14 +78,19 @@ class EmbeddingEncoder(nn.Module):
     
         
         normalized_steps_reshaped = jnp.array(obs.normalized_steps)
-        normalized_steps_reshaped =  jnp.reshape(normalized_steps_reshaped, normalized_steps_reshaped.shape + (1,1,1)) # (B, Env) -> # (Env, 1,1,1)
-        normalized_steps_reshaped = jnp.tile(normalized_steps_reshaped, reps=(1,) + tile_type_embeddings.shape[-3:-1] + (1,))  # (B, Env, w,h,1)
+        normalized_steps_reshaped =  jnp.reshape(normalized_steps_reshaped, normalized_steps_reshaped.shape + (1,1,1)) # (Env) -> # (Env, 1,1,1)
+        normalized_steps_reshaped = jnp.tile(normalized_steps_reshaped, reps=(1,) + tile_type_embeddings.shape[-3:-1] + (1,))  # (Env, w,h,1)
+
+        param_list_reshaped = jnp.array(obs.param_list)
+        param_list_reshaped =  jnp.reshape(param_list_reshaped, (param_list_reshaped.shape[0],) + (1,1) + (param_list_reshaped.shape[1],)) # (Env, 11) -> # (Env, 1,1,11)
+        param_list_reshaped = jnp.tile(param_list_reshaped, reps=(1,) + tile_type_embeddings.shape[-3:-1] + (1,))  # (Env, w,h,11)
 
 
         grid_embedding = jnp.concatenate(
             [
                 tile_type_embeddings,
                 normalized_steps_reshaped,
+                param_list_reshaped,
                 obs.normalized_unit_counts[..., jnp.newaxis],
                 obs.normalized_unit_counts_opp[..., jnp.newaxis],
                 obs.normalized_unit_energys_max_grid[..., jnp.newaxis],
@@ -277,6 +282,7 @@ def make_train(config, writer, env=None, env_params=None):
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            param_list=fill_zeroes((11,), dtype=jnp.float32),
         )
 
 
@@ -304,6 +310,28 @@ def make_train(config, writer, env=None, env_params=None):
 
         # TRAIN LOOP
         def _update_step(update_count, runner_state):
+            
+            train_state, old_env_state, _, rng = runner_state
+
+            # sample random params initially
+            def sample_params(rng_key):
+                randomized_game_params = dict()
+                for k, v in env_params_ranges.items():
+                    rng_key, subkey = jax.random.split(rng_key)
+                    if isinstance(v[0], int):
+                        randomized_game_params[k] = jax.random.choice(subkey, jax.numpy.array(v, dtype=jnp.int16))
+                    else:
+                        randomized_game_params[k] = jax.random.choice(subkey, jax.numpy.array(v, dtype=jnp.float32))
+                params = EnvParams(**randomized_game_params)
+                return params
+
+            rng, subkey = jax.random.split(rng)
+            env_params = debuggable_vmap(sample_params)(jax.random.split(subkey, config["NUM_ENVS"]))
+
+            rng, _rng = jax.random.split(rng)
+            reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
+            obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, 0, 0))(reset_rng, env_params, old_env_state) # pass in old_env_state for log and normalize state
+
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, (last_obs_0, last_obs_1), rng = runner_state
@@ -327,7 +355,7 @@ def make_train(config, writer, env=None, env_params=None):
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
                 obsv, env_state, (reward_0, reward_1), done, info = debuggable_vmap(
-                    env.step, in_axes=(0, 0, 0, None)
+                    env.step, in_axes=(0, 0, 0, 0)
                 )(rng_step, env_state, action, env_params)
 
                 transition_0 = Transition(
@@ -338,6 +366,8 @@ def make_train(config, writer, env=None, env_params=None):
                 )
                 runner_state = (train_state, env_state, obsv, rng)
                 return runner_state, (transition_0, transition_1)
+
+            runner_state = (train_state, env_state, obsv, rng)
 
             runner_state, (traj_batch_0, traj_batch_1) = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
@@ -536,7 +566,7 @@ def make_train(config, writer, env=None, env_params=None):
             return runner_state
 
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, env_state, obsv, _rng)
+        runner_state = (train_state, env_state, obsv, _rng) # env_state and obsv are thrown away from that first reset
         runner_state = jax.lax.fori_loop(0, config["NUM_UPDATES"], _update_step, runner_state)
 
         return {"runner_state": runner_state}

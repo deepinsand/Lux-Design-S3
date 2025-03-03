@@ -44,7 +44,7 @@ def load_model_for_inference(rng, network_cls, env, env_params):
         grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-
+        param_list=fill_zeroes((11,), dtype=jnp.float32),
     )
 
     network_params = network.init(rng, init_obs)

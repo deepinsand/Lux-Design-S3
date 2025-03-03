@@ -75,6 +75,7 @@ class WrappedEnvObs:
     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     value_of_sapping_grid: chex.Array
+    param_list: chex.Array
 
 @struct.dataclass
 class StatefulEnvState:
@@ -540,6 +541,21 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # mask the range they can sap
         # find the higest point        
 
+        param_list = jnp.array([
+            params.unit_move_cost / float(env_params_ranges["unit_move_cost"][-1]),
+            params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
+            params.nebula_tile_vision_reduction / float(env_params_ranges["nebula_tile_vision_reduction"][-1]),
+            params.nebula_tile_energy_reduction / float(env_params_ranges["nebula_tile_energy_reduction"][-1]),
+            params.unit_sap_cost / float(env_params_ranges["unit_sap_cost"][-1]),
+            params.unit_sap_range / float(env_params_ranges["unit_sap_range"][-1]),
+            params.unit_sap_dropoff_factor / float(env_params_ranges["unit_sap_dropoff_factor"][-1]),
+            params.unit_energy_void_factor / float(env_params_ranges["unit_energy_void_factor"][-1]),
+            # map randomizations
+            params.nebula_tile_drift_speed / float(env_params_ranges["nebula_tile_drift_speed"][-1]),
+            params.energy_node_drift_speed / float(env_params_ranges["energy_node_drift_speed"][-1]),
+            params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
+        ])
+
         new_observation = WrappedEnvObs(
             relic_map=relic_map, # not used
             normalized_unit_counts=normalized_unit_counts,
@@ -557,6 +573,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
             value_of_sapping_grid=value_of_sapping_grid,
+            param_list=param_list
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
@@ -651,16 +668,19 @@ class NormalizeVecReward(GymnaxWrapper):
         super().__init__(env)
         self.gamma = gamma
 
-    def reset(self, key, params=None):
+    def reset(self, key, params=None, old_state=None):
         obs, state = self._env.reset(key, params)
         batch_count = 1
-        state = NormalizeVecRewEnvState(
-            mean=0.0,
-            var=1.0,
-            count=1e-4,
-            return_val=jnp.zeros((batch_count,)),
-            env_state=state,
-        )
+        if old_state is not None:
+            state = old_state
+        else:
+            state = NormalizeVecRewEnvState(
+                mean=0.0,
+                var=1.0,
+                count=1e-4,
+                return_val=jnp.zeros((batch_count,)),
+                env_state=state,
+            )
         return obs, state
 
     def step(self, key, state, action, params=None):
@@ -716,10 +736,13 @@ class LogWrapper(GymnaxWrapper):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None, old_state: Optional[LogEnvState] = None,
     ) -> Tuple[chex.Array, environment.EnvState]:
         obs, env_state = self._env.reset(key, params)
-        state = LogEnvState(env_state, 0, 0, 0, 0, 0)
+        if old_state is not None:
+            state = old_state
+        else:
+            state = LogEnvState(env_state, 0, 0, 0, 0, 0)
         return obs, state
 
     @partial(jax.jit, static_argnums=(0,))
