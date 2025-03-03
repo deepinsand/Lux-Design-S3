@@ -338,13 +338,24 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     
     @partial(jax.jit, static_argnums=(0,))
     def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params, team_id, opp_team_id):
-        total_spaces = self.fixed_env_params.map_width * self.fixed_env_params.map_height
         observed_relic_node_positions = jnp.array(obs.relic_nodes) # shape (max_relic_nodes, 2)
         observed_relic_nodes_mask = jnp.array(obs.relic_nodes_mask) # shape (max_relic_nodes, )
-
-        discovered_relic_nodes_mask = state.discovered_relic_nodes_mask | observed_relic_nodes_mask
-        discovered_relic_node_positions = jnp.maximum(state.discovered_relic_node_positions, observed_relic_node_positions)
         
+        reshaped_observed_relic_nodes_mask = jnp.stack([observed_relic_nodes_mask, observed_relic_nodes_mask]).T.astype(jnp.int16) 
+        inverse_negative_reshaped_observed_relic_nodes_mask = reshaped_observed_relic_nodes_mask - 1
+        sym_observed_relic_node_positions = self.fixed_env_params.map_width - 1 - observed_relic_node_positions[:, [1,0]]
+        sym_observed_relic_node_positions = sym_observed_relic_node_positions * reshaped_observed_relic_nodes_mask + inverse_negative_reshaped_observed_relic_nodes_mask
+
+        half_max_num_relics = self.fixed_env_params.max_relic_nodes // 2
+        flipped_sym_observed_relic_node_positions = jnp.concatenate([sym_observed_relic_node_positions[half_max_num_relics:, :], sym_observed_relic_node_positions[:half_max_num_relics, :]], axis=0)
+        observed_relic_node_positions_with_symmetry = jnp.maximum(observed_relic_node_positions, flipped_sym_observed_relic_node_positions)
+        
+        flipped_observed_relic_nodes_mask = jnp.concatenate([observed_relic_nodes_mask[half_max_num_relics:], observed_relic_nodes_mask[:half_max_num_relics]], axis=0)
+        observed_relic_nodes_mask_with_symmetry = observed_relic_nodes_mask | flipped_observed_relic_nodes_mask
+
+        discovered_relic_nodes_mask = state.discovered_relic_nodes_mask | observed_relic_nodes_mask_with_symmetry
+        discovered_relic_node_positions = jnp.maximum(state.discovered_relic_node_positions, observed_relic_node_positions_with_symmetry)
+
         num_relics_discovered = discovered_relic_nodes_mask.sum()
 
         # state.py:348 shows spawn schedule.  2 spawn 0.50 with 100%, 2 spawn 100-150 with 66%, 2 spawn 200-250 with 33%
@@ -357,12 +368,16 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # 1) calculate last visit history
         current_step_last_visit = obs.sensor_mask * obs.steps
         sensor_mask_inverse = 1 - obs.sensor_mask
+        sensor_mask = jnp.array(obs.sensor_mask)
+        sensor_mask_symmetrical = jnp.logical_or(sensor_mask , sensor_mask[::-1, ::-1].T)
         
         sensor_last_visit = state.sensor_last_visit * sensor_mask_inverse # will set last_visit  to 0 wherever the sensors are visible
         sensor_last_visit = sensor_last_visit + current_step_last_visit # will set last_visit to obs.match_steps wherever the sensors are visible
+        sensor_last_visit_symmetrical = jnp.maximum(sensor_last_visit, sensor_last_visit[::-1, ::-1].T) # Relics are spawned symetrricallys, so the sensor visit from the POV of the relics can be symmetrical
+
 
         last_relic_spawn_point = (self.fixed_env_params.max_steps_in_match * 5) // 2 # state.py:348 shows spawn schedule
-        has_seen_everywhere_after_match_1 = jnp.all(sensor_last_visit > last_relic_spawn_point)
+        has_seen_everywhere_after_match_1 = jnp.all(sensor_last_visit_symmetrical > last_relic_spawn_point)
         num_relics_undiscovered = num_relics_undiscovered * (1 - has_seen_everywhere_after_match_1) # once we've seen everywhere we know there are no more relics to discover
 
         # 3) calculate probabilty of non-observable spaces having a relic:
@@ -392,17 +407,17 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
 
 
-        unobserved_time_during_first_relic_spawn = jnp.min(jnp.array([50, obs.steps])) - sensor_last_visit # capped at 50 because unobserved time after that is irrellevant
+        unobserved_time_during_first_relic_spawn = jnp.min(jnp.array([50, obs.steps])) - sensor_last_visit_symmetrical # capped at 50 because unobserved time after that is irrellevant
         unobserved_time_during_first_relic_spawn = jnp.clip(unobserved_time_during_first_relic_spawn, min=0, max=50) # capped at 50
 
         # if obs.steps > 100, make this 0
         second_relic_spawn_conditional_start_time = jax.lax.cond(obs.steps > 100, lambda: obs.steps, lambda: -1)
-        unobserved_time_during_second_relic_spawn = jnp.min(jnp.array([150, second_relic_spawn_conditional_start_time])) - sensor_last_visit # capped at 150 because unobserved time after that is irrellevant
+        unobserved_time_during_second_relic_spawn = jnp.min(jnp.array([150, second_relic_spawn_conditional_start_time])) - sensor_last_visit_symmetrical # capped at 150 because unobserved time after that is irrellevant
         unobserved_time_during_second_relic_spawn = jnp.clip(unobserved_time_during_second_relic_spawn, min=0, max=50) # capped at 50
 
         # if obs.steps > 200, make this 0
         third_relic_spawn_conditional_start_time = jax.lax.cond(obs.steps > 200, lambda: obs.steps, lambda: -1)
-        unobserved_time_during_third_relic_spawn = jnp.min(jnp.array([250, third_relic_spawn_conditional_start_time])) - sensor_last_visit # capped at 150 because unobserved time after that is irrellevant
+        unobserved_time_during_third_relic_spawn = jnp.min(jnp.array([250, third_relic_spawn_conditional_start_time])) - sensor_last_visit_symmetrical # capped at 150 because unobserved time after that is irrellevant
         unobserved_time_during_third_relic_spawn = jnp.clip(unobserved_time_during_third_relic_spawn, min=0, max=50) # capped at 50
         
         # Lower chances of later relics being spawned
@@ -445,7 +460,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         normalized_unit_energys_max_grid_opp = unit_energys_max_grid_opp.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
-        normalized_energy_field = obs.map_features.energy.astype(jnp.float32) / self.fixed_env_params.max_energy_per_tile
+        energy_field_with_extra_mask = obs.map_features.energy - (sensor_mask_inverse * self.fixed_env_params.max_energy_per_tile)
+        symmetrical_energy_field = jnp.maximum(energy_field_with_extra_mask, energy_field_with_extra_mask[::-1, ::-1].T) 
+        normalized_energy_field = symmetrical_energy_field.astype(jnp.float32) / self.fixed_env_params.max_energy_per_tile
+
+        tile_type = jnp.array(obs.map_features.tile_type)
+        symmetrical_tile_type = jnp.maximum(tile_type, tile_type[::-1, ::-1].T)
 
 
         match_over = self.is_match_over(obs, state)
@@ -562,7 +582,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             normalized_unit_counts_opp=normalized_unit_counts_opp,
             normalized_unit_energys_max_grid=normalized_unit_energys_max_grid,
             normalized_unit_energys_max_grid_opp=normalized_unit_energys_max_grid_opp,
-            tile_type=jnp.array(obs.map_features.tile_type),
+            tile_type=symmetrical_tile_type,
             normalized_energy_field=normalized_energy_field,
             unit_positions=unit_positions,
             unit_mask=unit_mask,

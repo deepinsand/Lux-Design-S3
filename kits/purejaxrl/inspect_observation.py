@@ -30,13 +30,13 @@ if __name__ == "__main__":
     all_state = file["state"]
     all_action = file["actions"]
 
-    step = 42
-    original_obs = all_original_obs[step]
-    state = all_state[step]
-    prev_state = all_state[step - 1]
-    new_obs = all_new_obs[step]
-    action = all_action[step]
+    for step in range(26, 505):
+        original_obs = all_original_obs[step]
+        state = all_state[step]
+        prev_state = all_state[step - 1]
+        new_obs = all_new_obs[step]
+        action = all_action[step]
 
-    next_obs, next_env_state = env.transform_obs(original_obs, prev_state, env.fixed_env_params, 0, 1)
+        next_obs, next_env_state = env.transform_obs(original_obs, prev_state, env.fixed_env_params, 0, 1)
 
-    print(next_obs)
+        print(next_obs)

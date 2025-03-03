@@ -72,18 +72,17 @@ class EmbeddingEncoder(nn.Module):
     
     @nn.compact
     def __call__(self, obs):
-        # 3 tiles types, empty, nebula, asteriod, and -1 for unknwon
         tile_type_embeder = nn.Embed(4, self.map_tile_emb_dim + 1, jnp.float32) # B x ENV x w x h x map_tile_emb_dim
         tile_type_embeddings =  tile_type_embeder(obs.tile_type)
     
-        
+        map_shape = tile_type_embeddings.shape[-3:-1]
         normalized_steps_reshaped = jnp.array(obs.normalized_steps)
         normalized_steps_reshaped =  jnp.reshape(normalized_steps_reshaped, normalized_steps_reshaped.shape + (1,1,1)) # (Env) -> # (Env, 1,1,1)
-        normalized_steps_reshaped = jnp.tile(normalized_steps_reshaped, reps=(1,) + tile_type_embeddings.shape[-3:-1] + (1,))  # (Env, w,h,1)
+        normalized_steps_reshaped = jnp.tile(normalized_steps_reshaped, reps=(1,) + map_shape + (1,))  # (Env, w,h,1)
 
         param_list_reshaped = jnp.array(obs.param_list)
         param_list_reshaped =  jnp.reshape(param_list_reshaped, (param_list_reshaped.shape[0],) + (1,1) + (param_list_reshaped.shape[1],)) # (Env, 11) -> # (Env, 1,1,11)
-        param_list_reshaped = jnp.tile(param_list_reshaped, reps=(1,) + tile_type_embeddings.shape[-3:-1] + (1,))  # (Env, w,h,11)
+        param_list_reshaped = jnp.tile(param_list_reshaped, reps=(1,) + map_shape + (1,))  # (Env, w,h,11)
 
 
         grid_embedding = jnp.concatenate(
