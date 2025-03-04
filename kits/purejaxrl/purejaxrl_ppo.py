@@ -11,9 +11,9 @@ from flax.training.train_state import TrainState
 import distrax
 import gymnax
 import math
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
+from jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
 import functools
-from luxai_s3.params import EnvParams, env_params_ranges
+from luxai_s3_local.params import EnvParams, env_params_ranges
 from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward, LogWrapper
 
 # Re-use the ResNet block and convolutional encoder from before.

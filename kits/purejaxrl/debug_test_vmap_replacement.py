@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jax import jit
 from functools import partial
-from packages.purejaxrl.purejaxrl.jax_debug import loop_based_vmap_replacement, debuggable_vmap
+from kits.purejaxrl.jax_debug import loop_based_vmap_replacement, debuggable_vmap
 from typing import NamedTuple
 
 class TestNamedTuple(NamedTuple):

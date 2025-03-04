@@ -5,18 +5,24 @@ import jax
 import jax.numpy as jnp
 import flax
 import dacite
-from purejaxrl_ppo import ActorCritic
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
-from purejaxrl_train import config
+from purejaxrl_config import config
 from functools import partial
-from luxai_s3.params import EnvParams
-from luxai_s3.state import EnvObs
-from luxai_s3.env import LuxAIS3Env
+from luxai_s3_local.params import EnvParams
+from luxai_s3_local.state import EnvObs
+from luxai_s3_local.env import LuxAIS3Env
 import time
+import os
+import sys
+
+from purejaxrl_ppo import ActorCritic
 
 def load_model_for_inference(rng, network_cls, env, env_params):
 
-    with open("models/latest_model.pkl", 'rb') as f: # Binary read mode for pickle
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_file_dir, "models/242416paramsrun.pkl")
+
+    with open(model_path, 'rb') as f: # Binary read mode for pickle
         loaded_params = pickle.load(f) # Load parameters directly using pickle.load
 
     action_space = env.action_space(env_params)
@@ -48,7 +54,6 @@ def load_model_for_inference(rng, network_cls, env, env_params):
     )
 
     network_params = network.init(rng, init_obs)
-
     loaded_params = flax.serialization.from_state_dict(network_params['params'], loaded_params['params'])
 
 
@@ -72,15 +77,12 @@ class Agent():
         rng = jax.random.PRNGKey(0)
         self.rng, rng_reset = jax.random.split(rng)
         self.model, self.model_params= load_model_for_inference(rng_reset, ActorCritic, self.env, self.env_cfg) # Or path to your saved .npz file
-        print(f"model load: {time.time() - t0:.2f} s")
-
+   
         self.env_state = self.env.empty_stateful_env_state()
 
     @partial(jax.jit, static_argnums=(0,))
     def get_action(self, env_state, env_obs, rng_act):
         new_obs, env_state = self.env.transform_obs(env_obs, env_state, self.env_cfg, self.team_id, self.opp_team_id)
-        #print(f"transform_obs: {time.time() - t0:.2f} s")
-
 
         new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
 
@@ -90,7 +92,6 @@ class Agent():
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
-        
         t0 = time.time()
 
         env_obs = dacite.from_dict(data_class=EnvObs, data=obs)

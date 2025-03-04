@@ -7,8 +7,8 @@ from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 
-from luxai_s3.params import EnvParams, env_params_ranges
-from luxai_s3.state import (
+from luxai_s3_local.params import EnvParams, env_params_ranges
+from luxai_s3_local.state import (
     ASTEROID_TILE,
     ENERGY_NODE_FNS,
     NEBULA_TILE,
@@ -19,7 +19,7 @@ from luxai_s3.state import (
     gen_state
 )
 
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap
+from jax_debug import debuggable_vmap
 
 
 class MultiDiscrete:

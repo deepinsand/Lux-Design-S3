@@ -1,0 +1,2 @@
+tar -czf submission.tar.gz $(find . -maxdepth 1 -type f) models/242416paramsrun.pkl ./distrax/ ./lux/ ./luxai_s3_local/
+mv submission.tar.gz logs

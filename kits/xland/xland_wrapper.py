@@ -19,7 +19,7 @@ from luxai_s3.state import (
     gen_state
 )
 
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap
+from kits.purejaxrl.jax_debug import debuggable_vmap
 
 
 class MultiDiscrete:

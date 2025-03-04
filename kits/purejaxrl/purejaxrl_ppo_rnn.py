@@ -10,7 +10,7 @@ import distrax
 import gymnax
 from packages.purejaxrl.purejaxrl.wrappers import LogWrapper
 import math
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_scan
+from kits.purejaxrl.jax_debug import debuggable_vmap, debuggable_scan
 import functools
 from flax.typing import Dtype
 

@@ -21,7 +21,7 @@ from flax.training.train_state import TrainState
 from xland_util import Transition, calculate_gae, ppo_update_networks, rollout
 
 from xminigrid.environment import Environment, EnvParams
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap, debuggable_pmap
+from kits.purejaxrl.jax_debug import debuggable_vmap, debuggable_pmap
 
 from nn import ActorCriticRNN
 # must come after import nn since that import distrax, which will require keras if this is imported first

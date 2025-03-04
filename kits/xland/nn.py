@@ -14,7 +14,7 @@ from flax.typing import Dtype
 
 from xland_wrapper import WrappedEnvObs
 from luxai_s3.params import EnvParams
-from packages.purejaxrl.purejaxrl.jax_debug import debuggable_vmap
+from kits.purejaxrl.jax_debug import debuggable_vmap
 
 class GRU(nn.Module):
     hidden_dim: int

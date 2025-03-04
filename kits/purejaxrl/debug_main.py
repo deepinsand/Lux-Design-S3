@@ -5,13 +5,24 @@ import sys
 from argparse import Namespace
 import os
 import numpy as np
+# Get the absolute path to the sub_repo directory
+sub_repo_path = os.path.join(os.path.dirname(__file__), 'distrax')
+sys.path.append(sub_repo_path)
 
-
+from purejaxrl_agent import Agent
 # from lux.config import EnvConfig
 from lux.kit import from_json
 ### DO NOT REMOVE THE FOLLOWING CODE ###
 agent_dict = dict() # store potentially multiple dictionaries as kaggle imports code directly
 agent_prev_obs = dict()
+import time
+import pickle
+
+all_new_obs = []
+all_env_states = []
+all_orignal_obs = []
+all_actions = []
+
 def agent_fn(observation, configurations):
     """
     agent definition for kaggle submission.
@@ -23,29 +34,30 @@ def agent_fn(observation, configurations):
     step = observation.step
     player = observation.player
     remainingOverageTime = observation.remainingOverageTime
-
+    if step == 0:
+        agent_dict[player] = Agent(player, configurations["env_cfg"])
     if "__raw_path__" in configurations:
         dirname = os.path.dirname(configurations["__raw_path__"])
     else:
         dirname = os.path.dirname(__file__)
 
     sys.path.append(os.path.abspath(dirname))
-    sub_repo_path = os.path.join(dirname, 'distrax')
-    sys.path.append(sub_repo_path)
 
-    try:
-        from purejaxrl_agent import Agent
+    agent = agent_dict[player]
+    actions, new_obs, orignal_obs, env_state = agent.act(step, from_json(obs), remainingOverageTime)
 
-        if step == 0:
-            agent_dict[player] = Agent(player, configurations["env_cfg"])
-        
-        agent = agent_dict[player]
-        actions, _, _, _ = agent.act(step, from_json(obs), remainingOverageTime)
-    except Exception as e:
-        print(e) # print it since kaggle output is so little
-        raise e
-
+    if player == "player_0":
+        all_new_obs.append(new_obs)
+        all_env_states.append(env_state)
+        all_orignal_obs.append(orignal_obs)
+        all_actions.append(actions)
+        if step == 504:
+            with open("logs/obs.pkl", 'wb') as f: # Binary write mode for pickle
+                pickle.dump({"new_obs": all_new_obs, "state": all_env_states, "original_obs": all_orignal_obs, "actions": all_actions}, f) # Directly pickle train_state.params
+            print(f"New observations for player 0saved to (pickle): logs/obs.pkl")
     return dict(action=actions.tolist())
+
+
 if __name__ == "__main__":
     
     def read_input():
@@ -60,14 +72,25 @@ if __name__ == "__main__":
     player_id = 0
     env_cfg = None
     i = 0
+    t0 = time.time()
+
     while True:
+        #print(f"t0: {time.time() - t0:.2f} s")
+
         inputs = read_input()
+        #print(f"t1: {time.time() - t0:.2f} s")
         raw_input = json.loads(inputs)
+        #print(f"t2: {time.time() - t0:.2f} s")
         observation = Namespace(**dict(step=raw_input["step"], obs=raw_input["obs"], remainingOverageTime=raw_input["remainingOverageTime"], player=raw_input["player"], info=raw_input["info"]))
+
+        #print(f"t3: {time.time() - t0:.2f} s")
+
         if i == 0:
             env_cfg = raw_input["info"]["env_cfg"]
             player_id = raw_input["player"]
         i += 1
         actions = agent_fn(observation, dict(env_cfg=env_cfg))
+        #print(f"t4: {time.time() - t0:.2f} s")
+
         # send actions to engine
         print(json.dumps(actions))

@@ -1,4 +1,10 @@
+
 import os
+import sys
+
+# Get the absolute path to the sub_repo directory
+sub_repo_path = os.path.join(os.path.dirname(__file__), 'distrax')
+sys.path.append(sub_repo_path)
 
 import jax.experimental
 import jax.experimental.checkify
@@ -10,34 +16,15 @@ import shutil  # For copying files
 import flax
 import pickle
 
-from luxai_s3.params import EnvParams
-from luxai_s3.env import LuxAIS3Env
-from luxai_s3.params import env_params_ranges
+from luxai_s3_local.params import EnvParams, env_params_ranges
+from luxai_s3_local.env import LuxAIS3Env
 from purejaxrl_ppo import make_train
 
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 
 from flax.metrics import tensorboard
 
-config = {
-    "LR": 2.5e-4,
-    "NUM_ENVS": 32,
-    "NUM_STEPS": 101, # MUST STAY 101!!!
-    "TOTAL_TIMESTEPS": 4_000_000,
-    "UPDATE_EPOCHS": 4,
-    "NUM_MINIBATCHES": 4, # must be less than num_envs since RNN shuffles environemnts
-    "GAMMA": 0.995,
-    "GAE_LAMBDA": 0.95,
-    "CLIP_EPS": 0.2,
-    "ENT_COEF": 0.01,
-    "VF_COEF": 0.5,
-    "MAX_GRAD_NORM": 0.5,
-    "ACTIVATION": "tanh",
-    "ANNEAL_LR": True,
-    "DEBUG": True,
-    "PROFILE": False,
-    "CONVOLUTIONS": True,
-}
+from purejaxrl_config import config
 
 if __name__ == "__main__":
 
