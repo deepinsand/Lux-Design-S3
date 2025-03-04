@@ -7,8 +7,8 @@ from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 
-from luxai_s3_local.params import EnvParams, env_params_ranges
-from luxai_s3_local.state import (
+from luxai_s3.params import EnvParams, env_params_ranges
+from luxai_s3.state import (
     ASTEROID_TILE,
     ENERGY_NODE_FNS,
     NEBULA_TILE,
@@ -535,7 +535,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # TODO: account for units getting killed, check energy?
 
         # Figure out sapping locations
-        unit_positions_opp_diff_last_round = jnp.where(state.unit_mask_opp_last_round, (unit_positions_opp - state.unit_positions_opp_last_round), jnp.array([0, 0]))
+        unit_mask_opp_last_round_stacked = jnp.stack([state.unit_mask_opp_last_round, state.unit_mask_opp_last_round], axis=1).astype(jnp.int16)
+        unit_positions_opp_diff_last_round = unit_mask_opp_last_round_stacked * (unit_positions_opp - state.unit_positions_opp_last_round)
         unit_positions_opp_predicted = unit_positions_opp + unit_positions_opp_diff_last_round
        
        # TODO: account for units moving towards EP?

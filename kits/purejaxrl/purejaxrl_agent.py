@@ -8,9 +8,9 @@ import dacite
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs
 from purejaxrl_config import config
 from functools import partial
-from luxai_s3_local.params import EnvParams
-from luxai_s3_local.state import EnvObs
-from luxai_s3_local.env import LuxAIS3Env
+from luxai_s3.params import EnvParams
+from luxai_s3_local.state import EnvObs # kaggle enviornment has a different one?
+from luxai_s3.env import LuxAIS3Env
 import time
 import os
 import sys

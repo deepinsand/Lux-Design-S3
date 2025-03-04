@@ -16,8 +16,8 @@ import shutil  # For copying files
 import flax
 import pickle
 
-from luxai_s3_local.params import EnvParams, env_params_ranges
-from luxai_s3_local.env import LuxAIS3Env
+from luxai_s3.params import EnvParams, env_params_ranges
+from luxai_s3.env import LuxAIS3Env
 from purejaxrl_ppo import make_train
 
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
