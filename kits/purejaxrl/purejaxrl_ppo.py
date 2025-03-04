@@ -504,7 +504,7 @@ def make_train(config, writer, env=None, env_params=None):
                 _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
             )
             train_state = update_state[0]
-            metric = traj_batch.info
+            metric = traj_batch_0.info
             rng = update_state[-1]
 
             # --- TensorBoard Logging ---

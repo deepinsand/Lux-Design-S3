@@ -727,11 +727,12 @@ class NormalizeVecReward(GymnaxWrapper):
         self.gamma = gamma
 
     def reset(self, key, params=None, old_state=None):
-        obs, state = self._env.reset(key, params)
         batch_count = 1
         if old_state is not None:
-            state = old_state
+            obs, state = self._env.reset(key, params, old_state.env_state)
+            state = NormalizeVecRewEnvState(env_state=state, mean=old_state.mean, var=old_state.var, count=old_state.count, return_val=old_state.return_val)
         else:
+            obs, state = self._env.reset(key, params)
             state = NormalizeVecRewEnvState(
                 mean=0.0,
                 var=1.0,
@@ -798,7 +799,14 @@ class LogWrapper(GymnaxWrapper):
     ) -> Tuple[chex.Array, environment.EnvState]:
         obs, env_state = self._env.reset(key, params)
         if old_state is not None:
-            state = old_state
+             state = LogEnvState(
+                env_state=env_state, # importantly keep the new env_state from the reset
+                episode_returns=old_state.episode_returns,
+                episode_lengths=old_state.episode_lengths,
+                returned_episode_returns=old_state.returned_episode_returns,
+                returned_episode_lengths=old_state.returned_episode_lengths,
+                timestep=old_state.timestep,
+             )
         else:
             state = LogEnvState(env_state, 0, 0, 0, 0, 0)
         return obs, state
