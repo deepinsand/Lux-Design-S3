@@ -75,6 +75,7 @@ class WrappedEnvObs:
     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     value_of_sapping_grid: chex.Array
+    sensor_mask: chex.Array
     action_mask: chex.Array
     param_list: chex.Array
 
@@ -92,6 +93,7 @@ class StatefulEnvState:
     total_times_positions_are_occupied: chex.Array
     unit_positions_opp_last_round: chex.Array
     unit_mask_opp_last_round: chex.Array
+    symmetrical_tile_type_last_round: chex.Array
     candidate_sap_locations: chex.Array
 
 @struct.dataclass
@@ -131,11 +133,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 0., dtype=jnp.float32),
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.float32),
             total_rewards_when_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 0., dtype=jnp.float32),
-            total_times_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1., dtype=jnp.int16), # start at 1 to avoid div 0
+            total_times_positions_are_occupied=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), 1, dtype=jnp.int16), # start at 1 to avoid div 0
             team_wins=jnp.zeros(2, dtype=jnp.int32),
             team_points=jnp.zeros(2, dtype=jnp.int32),
             unit_positions_opp_last_round=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int16),
             unit_mask_opp_last_round=jnp.full(self.fixed_env_params.max_units, -1, dtype=jnp.bool),
+            symmetrical_tile_type_last_round=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
         )
         return empty_data
@@ -472,7 +475,33 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         tile_type = jnp.array(obs.map_features.tile_type)
         symmetrical_tile_type = jnp.maximum(tile_type, tile_type[::-1, ::-1].T)
 
+        # Code taken from underlying env
+        # Shift objects around in space
+        # Move the nebula tiles in state.map_features.tile_types up by 1 and to the right by 1
+        # this is also symmetric nebula tile movement
+        new_tile_types_map = jnp.roll(
+            state.symmetrical_tile_type_last_round,
+            shift=(
+                1 * jnp.sign(params.nebula_tile_drift_speed),
+                -1 * jnp.sign(params.nebula_tile_drift_speed),
+            ),
+            axis=(0, 1),
+        )
+        new_tile_types_map = jnp.where(
+            (obs.steps - 2) * abs(params.nebula_tile_drift_speed) % 1 > (obs.steps - 1) * abs(params.nebula_tile_drift_speed) % 1,
+            new_tile_types_map,
+            state.symmetrical_tile_type_last_round,
+        )
 
+        # symmetrical_tile_type_mask = symmetrical_tile_type != -1
+        # new_tile_types_map_mask = new_tile_types_map != -1
+        # differs = (new_tile_types_map != symmetrical_tile_type) & symmetrical_tile_type_mask & new_tile_types_map_mask
+
+        # ever_different = differs.any()
+        # jax.debug.print("ever_different: {}, step: {}", ever_different, obs.steps)
+
+        symmetrical_tile_type = jnp.maximum(symmetrical_tile_type, new_tile_types_map)
+        
         match_over = self.is_match_over(obs, state)
         
         # If there are no points, we need to do probability all relics being spawned
@@ -571,17 +600,17 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         param_list = jnp.array([
             params.unit_move_cost / float(env_params_ranges["unit_move_cost"][-1]),
-            params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
+            #params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
             params.nebula_tile_vision_reduction / float(env_params_ranges["nebula_tile_vision_reduction"][-1]),
             params.nebula_tile_energy_reduction / float(env_params_ranges["nebula_tile_energy_reduction"][-1]),
             params.unit_sap_cost / float(env_params_ranges["unit_sap_cost"][-1]),
             params.unit_sap_range / float(env_params_ranges["unit_sap_range"][-1]),
-            params.unit_sap_dropoff_factor / float(env_params_ranges["unit_sap_dropoff_factor"][-1]),
+            #params.unit_sap_dropoff_factor / float(env_params_ranges["unit_sap_dropoff_factor"][-1]),
             params.unit_energy_void_factor / float(env_params_ranges["unit_energy_void_factor"][-1]),
             # map randomizations
-            params.nebula_tile_drift_speed / float(env_params_ranges["nebula_tile_drift_speed"][-1]),
-            params.energy_node_drift_speed / float(env_params_ranges["energy_node_drift_speed"][-1]),
-            params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
+            #params.nebula_tile_drift_speed / float(env_params_ranges["nebula_tile_drift_speed"][-1]),
+            #params.energy_node_drift_speed / float(env_params_ranges["energy_node_drift_speed"][-1]),
+            #params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
         ])
 
         new_observation = WrappedEnvObs(
@@ -594,6 +623,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             normalized_energy_field=normalized_energy_field,
             unit_positions=unit_positions,
             unit_mask=unit_mask,
+            sensor_mask=sensor_mask.astype(jnp.float32),
             normalized_steps=normalized_steps,
             grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
@@ -615,6 +645,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      total_rewards_when_positions_are_occupied=total_rewards_when_positions_are_occupied,
                                      total_times_positions_are_occupied=total_times_positions_are_occupied,
                                      sensor_last_visit=sensor_last_visit,
+                                     symmetrical_tile_type_last_round=symmetrical_tile_type,
                                      unit_positions_opp_last_round=unit_positions_opp,
                                      unit_mask_opp_last_round=unit_mask_opp,
                                      candidate_sap_locations=candidate_sap_locations,
