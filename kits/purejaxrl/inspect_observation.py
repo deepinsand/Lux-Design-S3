@@ -30,7 +30,7 @@ if __name__ == "__main__":
     all_state = file["state"]
     all_action = file["actions"]
 
-    for step in range(26, 505):
+    for step in range(28, 505):
         original_obs = all_original_obs[step]
         state = all_state[step]
         prev_state = all_state[step - 1]

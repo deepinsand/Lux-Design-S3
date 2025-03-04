@@ -75,6 +75,7 @@ class WrappedEnvObs:
     grid_min_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     value_of_sapping_grid: chex.Array
+    action_mask: chex.Array
     param_list: chex.Array
 
 @struct.dataclass
@@ -90,6 +91,7 @@ class StatefulEnvState:
     total_rewards_when_positions_are_occupied: chex.Array
     total_times_positions_are_occupied: chex.Array
     unit_positions_opp_last_round: chex.Array
+    unit_mask_opp_last_round: chex.Array
     candidate_sap_locations: chex.Array
 
 @struct.dataclass
@@ -133,6 +135,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             team_wins=jnp.zeros(2, dtype=jnp.int32),
             team_points=jnp.zeros(2, dtype=jnp.int32),
             unit_positions_opp_last_round=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int16),
+            unit_mask_opp_last_round=jnp.full(self.fixed_env_params.max_units, -1, dtype=jnp.bool),
             candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
         )
         return empty_data
@@ -265,7 +268,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         max_row_index_original = start_row + max_index_subsection[0] - padding_size
         max_col_index_original = start_col + max_index_subsection[1] - padding_size
 
-        return (max_row_index_original, max_col_index_original)
+        valid_action = (subsection > 0).any()
+        return (max_row_index_original, max_col_index_original, valid_action)
     
 
     def find_max_index_subsection_for_sap_ranges(self, grid, pos, subsection_size):
@@ -531,7 +535,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # TODO: account for units getting killed, check energy?
 
         # Figure out sapping locations
-        unit_positions_opp_diff_last_round = unit_positions_opp - state.unit_positions_opp_last_round
+        unit_positions_opp_diff_last_round = jnp.where(state.unit_mask_opp_last_round, (unit_positions_opp - state.unit_positions_opp_last_round), jnp.array([0, 0]))
         unit_positions_opp_predicted = unit_positions_opp + unit_positions_opp_diff_last_round
        
        # TODO: account for units moving towards EP?
@@ -552,7 +556,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # todo: normalize
         value_of_sapping_grid = number_units_killed_adjacent_hit_summed_grid + number_units_killed_direct_hit_grid +  unit_energy_potentially_taken_sum_grid_opp_normalized / 9.
 
-        candidate_sap_locations_x, candidate_sap_locations_y = debuggable_vmap(self.find_max_index_subsection_for_sap_ranges, in_axes=(None, 0, None), out_axes=0)(
+        candidate_sap_locations_x, candidate_sap_locations_y, valid_saps = debuggable_vmap(self.find_max_index_subsection_for_sap_ranges, in_axes=(None, 0, None), out_axes=0)(
             value_of_sapping_grid, unit_positions, params.unit_sap_range
         )
         candidate_sap_locations = jnp.column_stack((candidate_sap_locations_x, candidate_sap_locations_y))
@@ -560,6 +564,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         #go through each unit
         # mask the range they can sap
         # find the higest point        
+        action_mask_without_saps = self.action_mask(unit_positions, symmetrical_tile_type == ASTEROID_TILE)
+        action_mask = jnp.concatenate([action_mask_without_saps, valid_saps[:, jnp.newaxis]], axis=1)
 
         param_list = jnp.array([
             params.unit_move_cost / float(env_params_ranges["unit_move_cost"][-1]),
@@ -593,6 +599,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
             value_of_sapping_grid=value_of_sapping_grid,
+            action_mask=action_mask,
             param_list=param_list
         )
         
@@ -607,11 +614,41 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      total_times_positions_are_occupied=total_times_positions_are_occupied,
                                      sensor_last_visit=sensor_last_visit,
                                      unit_positions_opp_last_round=unit_positions_opp,
+                                     unit_mask_opp_last_round=unit_mask_opp,
                                      candidate_sap_locations=candidate_sap_locations,
                                      )
         
         return new_observation, new_state
     
+    
+    def action_mask(self, unit_positions, asteroid_grid):
+        
+        asteroid_pos = jnp.argwhere(asteroid_grid, size=self.fixed_env_params.map_height * self.fixed_env_params.map_height)
+
+
+        action_diffs = jnp.array([
+            [0, 0],  # Do nothing
+            [0, -1],  # Move up
+            [1, 0],  # Move right
+            [0, 1],  # Move down
+            [-1, 0],  # Move left
+        ])
+
+        # Each row represents a unit, then 5 copies of the coordinates each representing an action
+        unit_3d = jnp.stack([unit_positions, unit_positions, unit_positions, unit_positions, unit_positions], axis=1) + action_diffs 
+        
+        off_the_map = jnp.isin(unit_3d, jnp.array([-1, self.fixed_env_params.map_height]))
+        action_mask = ~off_the_map.any(axis=2)
+
+        # Each row represents a unit, then 5 copies of the coordinates each representing an action
+
+        # Broadcast the two, adding dimensions for combinatorial explosion.  Axis were added to dimensions that I thought needed adding to?
+        unit_4d = unit_3d[:, :, jnp.newaxis, :] == asteroid_pos[jnp.newaxis, jnp.newaxis, :, :]
+        any_collisions = unit_4d.all(axis=3) # last dimension is of shape 2, representing x,y coordinates.  Need all to match for collision
+        asteroid_mask = ~any_collisions.any(axis=2) # last dimension is of shape num_asteriods, and the action is invalid if it hits any asteroid
+        action_mask = action_mask & asteroid_mask
+
+        return action_mask
 
 
     def is_match_over(self, obs, old_state):

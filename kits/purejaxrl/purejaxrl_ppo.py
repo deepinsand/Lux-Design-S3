@@ -198,9 +198,10 @@ class ActorCritic(nn.Module):
         )(actor_mean)
         #pi = distrax.Categorical(logits=actor_mean)
 
-        #actor_mean = actor_mean.reshape((-1, *self.action_dim))
+        actor_mean_masked = jnp.where(x.action_mask, actor_mean, -1e9)
+
         pi = distrax.Independent(
-            distrax.Categorical(logits=actor_mean),
+            distrax.Categorical(logits=actor_mean_masked),
             reinterpreted_batch_ndims=1
         )
 
@@ -281,6 +282,7 @@ def make_train(config, writer, env=None, env_params=None):
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+            action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
             param_list=fill_zeroes((11,), dtype=jnp.float32),
         )
 

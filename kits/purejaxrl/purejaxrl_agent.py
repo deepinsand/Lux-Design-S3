@@ -20,7 +20,7 @@ from purejaxrl_ppo import ActorCritic
 def load_model_for_inference(rng, network_cls, env, env_params):
 
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_file_dir, "models/242416paramsrun.pkl")
+    model_path = os.path.join(current_file_dir, "models/latest_model.pkl")
 
     with open(model_path, 'rb') as f: # Binary read mode for pickle
         loaded_params = pickle.load(f) # Load parameters directly using pickle.load
@@ -50,6 +50,7 @@ def load_model_for_inference(rng, network_cls, env, env_params):
         grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
         param_list=fill_zeroes((11,), dtype=jnp.float32),
     )
 
