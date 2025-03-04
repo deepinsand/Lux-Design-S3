@@ -363,7 +363,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         num_relics_discovered = discovered_relic_nodes_mask.sum()
 
         # state.py:348 shows spawn schedule.  2 spawn 0.50 with 100%, 2 spawn 100-150 with 66%, 2 spawn 200-250 with 33%
-        normalized_steps =  obs.steps / float(self.fixed_env_params.max_steps_in_episode + self.fixed_env_params.match_count_per_episode)
+        max_steps_in_episode = self.fixed_env_params.max_steps_in_match * self.fixed_env_params.match_count_per_episode
+        normalized_steps =  obs.steps / float(max_steps_in_episode + self.fixed_env_params.match_count_per_episode)
         spawn_steps = obs.steps // (self.fixed_env_params.max_steps_in_match // 2)
         max_relics = jnp.min(jnp.array([(1 + (obs.steps // self.fixed_env_params.max_steps_in_match)) * 2, self.fixed_env_params.max_relic_nodes]))
         num_relics_undiscovered = max_relics - num_relics_discovered
