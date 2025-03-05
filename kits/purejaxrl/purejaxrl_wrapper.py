@@ -104,7 +104,7 @@ def init_empty_obs(env_params, num_envs):
         sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
-        param_list=fill_zeroes((11,), dtype=jnp.float32),
+        param_list=fill_zeroes((4,), dtype=jnp.float32),
     )
 
 @struct.dataclass
@@ -123,6 +123,7 @@ class StatefulEnvState:
     unit_mask_opp_last_round: chex.Array
     symmetrical_tile_type_last_round: chex.Array
     candidate_sap_locations: chex.Array
+    drift_speed_guess: float
 
 @struct.dataclass
 class RewardInfo:
@@ -174,6 +175,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             unit_mask_opp_last_round=jnp.full(self.fixed_env_params.max_units, -1, dtype=jnp.bool),
             symmetrical_tile_type_last_round=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
+            drift_speed_guess=jnp.zeros((), dtype=jnp.float32),
         )
         return empty_data
     
@@ -375,7 +377,27 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         result = jnp.exp(convolved_log_arr)
 
         return result
-
+    
+    def drift_map(self, map, steps, drift_speed):
+                # Code taken from underlying env
+        # Shift objects around in space
+        # Move the nebula tiles in state.map_features.tile_types up by 1 and to the right by 1
+        # this is also symmetric nebula tile movement # 
+        # Drift speed is not known!!!
+        drifted_map = jnp.roll(
+            map,
+            shift=(
+                1 * jnp.sign(drift_speed),
+                -1 * jnp.sign(drift_speed),
+            ),
+            axis=(0, 1),
+        )
+        drifted_map = jnp.where(
+            (steps - 1) * abs(drift_speed) % 1 > (steps) * abs(drift_speed) % 1,
+            drifted_map,
+            map,
+        )
+        return drifted_map
     
     @partial(jax.jit, static_argnums=(0,))
     def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params, team_id, opp_team_id):
@@ -509,33 +531,47 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         tile_type = jnp.array(obs.map_features.tile_type)
         symmetrical_tile_type = jnp.maximum(tile_type, tile_type[::-1, ::-1].T)
 
+
+
         # Code taken from underlying env
         # Shift objects around in space
         # Move the nebula tiles in state.map_features.tile_types up by 1 and to the right by 1
-        # this is also symmetric nebula tile movement
-        new_tile_types_map = jnp.roll(
-            state.symmetrical_tile_type_last_round,
-            shift=(
-                1 * jnp.sign(params.nebula_tile_drift_speed),
-                -1 * jnp.sign(params.nebula_tile_drift_speed),
-            ),
-            axis=(0, 1),
-        )
-        new_tile_types_map = jnp.where(
-            (obs.steps - 2) * abs(params.nebula_tile_drift_speed) % 1 > (obs.steps - 1) * abs(params.nebula_tile_drift_speed) % 1,
-            new_tile_types_map,
-            state.symmetrical_tile_type_last_round,
-        )
-
-        # symmetrical_tile_type_mask = symmetrical_tile_type != -1
-        # new_tile_types_map_mask = new_tile_types_map != -1
-        # differs = (new_tile_types_map != symmetrical_tile_type) & symmetrical_tile_type_mask & new_tile_types_map_mask
-
-        # ever_different = differs.any()
-        # jax.debug.print("ever_different: {}, step: {}", ever_different, obs.steps)
-
-        symmetrical_tile_type = jnp.maximum(symmetrical_tile_type, new_tile_types_map)
+        # this is also symmetric nebula tile movement # 
+        # Drift speed is not known!!!
         
+        # jax.debug.print("ever_different: {}, step: {}, params: {}", ever_different, obs.steps, params.nebula_tile_drift_speed)
+
+        def two_maps_agree(map1, map2):
+            map1_mask = map1 != -1
+            map2_mask = map2 != -1
+            return ~(((map1 != map2) & map1_mask & map2_mask).any())
+        
+        observed_different = ~(two_maps_agree(state.symmetrical_tile_type_last_round, symmetrical_tile_type))
+
+        # obs.steps == 41 with 0.025, 21 with 0.05, 8 with 0.15, 11 with 0.1, 
+        def calculate_drift_speed():
+            # if it misses the first drift then the entire thing goes to hell
+            drift_speed = (40 // (jnp.maximum(1, (obs.steps - 2)) % 40)) * 0.025  
+            positive_drifted_map = self.drift_map(state.symmetrical_tile_type_last_round, obs.steps - 1, drift_speed)
+            negative_drifted_map = self.drift_map(state.symmetrical_tile_type_last_round, obs.steps - 1, -1. * drift_speed)
+            positive_drift_confirmation = two_maps_agree(positive_drifted_map, symmetrical_tile_type).astype(jnp.float32)
+            negative_drift_confirmation = two_maps_agree(negative_drifted_map, symmetrical_tile_type).astype(jnp.float32)
+            not_both_confirmed = 1. - (positive_drift_confirmation * negative_drift_confirmation)
+            # drift speed is not 0, so this helps us with the unknown case, represented here as 0
+            return ((drift_speed * positive_drift_confirmation) + (drift_speed * negative_drift_confirmation * -1.)) * not_both_confirmed
+
+        drift_speed_guess = jax.lax.cond((obs.steps > 7) & observed_different & (state.drift_speed_guess == 0.), calculate_drift_speed, lambda: state.drift_speed_guess)
+        
+        drifted_symmetrical_tile_type_last_round = self.drift_map(state.symmetrical_tile_type_last_round, obs.steps - 1, drift_speed_guess)
+        drifted_confirmed_with_observed = two_maps_agree(drifted_symmetrical_tile_type_last_round, symmetrical_tile_type)
+
+        # this should only happen if somehow on the 8th step, there was a drift but it was unobserved.  
+        symmetrical_tile_type = jax.lax.cond(
+            drifted_confirmed_with_observed, 
+            lambda: jnp.maximum(symmetrical_tile_type, drifted_symmetrical_tile_type_last_round),
+            lambda: symmetrical_tile_type.astype(jnp.int16)
+        )
+
         match_over = self.is_match_over(obs, state)
         
         # If there are no points, we need to do probability all relics being spawned
@@ -594,6 +630,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         
 
         # 6) combines by multiplying?
+       
 
 
         # TODO: account for units getting killed, check energy?
@@ -632,19 +669,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         action_mask_without_saps = self.action_mask(unit_positions, symmetrical_tile_type == ASTEROID_TILE)
         action_mask = jnp.concatenate([action_mask_without_saps, valid_saps[:, jnp.newaxis]], axis=1)
 
+        #known params: ['unit_move_cost', 'unit_sap_cost', 'unit_sap_range', 'unit_sensor_range'])
         param_list = jnp.array([
             params.unit_move_cost / float(env_params_ranges["unit_move_cost"][-1]),
             params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
-            params.nebula_tile_vision_reduction / float(env_params_ranges["nebula_tile_vision_reduction"][-1]),
-            params.nebula_tile_energy_reduction / float(env_params_ranges["nebula_tile_energy_reduction"][-1]),
             params.unit_sap_cost / float(env_params_ranges["unit_sap_cost"][-1]),
             params.unit_sap_range / float(env_params_ranges["unit_sap_range"][-1]),
-            params.unit_sap_dropoff_factor / float(env_params_ranges["unit_sap_dropoff_factor"][-1]),
-            params.unit_energy_void_factor / float(env_params_ranges["unit_energy_void_factor"][-1]),
-            # map randomizations
-            params.nebula_tile_drift_speed / float(env_params_ranges["nebula_tile_drift_speed"][-1]),
-            params.energy_node_drift_speed / float(env_params_ranges["energy_node_drift_speed"][-1]),
-            params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
         ])
 
         # add sensor last visit?
@@ -685,6 +715,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      unit_positions_opp_last_round=unit_positions_opp,
                                      unit_mask_opp_last_round=unit_mask_opp,
                                      candidate_sap_locations=candidate_sap_locations,
+                                     drift_speed_guess=drift_speed_guess,
+                               
                                      )
         
         reward_info = RewardInfo(unit_counts=unit_counts)

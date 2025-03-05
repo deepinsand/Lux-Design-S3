@@ -40,8 +40,8 @@ def load_model_for_inference(rng, network_cls, env, env_params):
 
 class Agent():
 
-    def __init__(self, player: str, env_cfg) -> None:
-        env_cfg = EnvParams(**env_cfg)
+    def __init__(self, player: str, env_cfg_dict) -> None:
+        env_cfg = EnvParams(**env_cfg_dict)
         self.env_cfg = env_cfg
         underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_cfg)
         self.env = LuxaiS3GymnaxWrapper(underlying_env)

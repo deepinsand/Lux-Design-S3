@@ -8,6 +8,7 @@ import numpy as np
 # Get the absolute path to the sub_repo directory
 sub_repo_path = os.path.join(os.path.dirname(__file__), 'distrax')
 sys.path.append(sub_repo_path)
+from luxai_s3.params import EnvParams
 
 from purejaxrl_agent import Agent
 # from lux.config import EnvConfig
@@ -28,6 +29,7 @@ def agent_fn(observation, configurations):
     agent definition for kaggle submission.
     """
     global agent_dict
+    global params
     obs = observation.obs
     if type(obs) == str:
         obs = json.loads(obs)
@@ -36,6 +38,8 @@ def agent_fn(observation, configurations):
     remainingOverageTime = observation.remainingOverageTime
     if step == 0:
         agent_dict[player] = Agent(player, configurations["env_cfg"])
+        params = EnvParams(**configurations["env_cfg"])
+
     if "__raw_path__" in configurations:
         dirname = os.path.dirname(configurations["__raw_path__"])
     else:
@@ -53,7 +57,7 @@ def agent_fn(observation, configurations):
         all_actions.append(actions)
         if step == 504:
             with open("logs/obs.pkl", 'wb') as f: # Binary write mode for pickle
-                pickle.dump({"new_obs": all_new_obs, "state": all_env_states, "original_obs": all_orignal_obs, "actions": all_actions}, f) # Directly pickle train_state.params
+                pickle.dump({"new_obs": all_new_obs, "state": all_env_states, "original_obs": all_orignal_obs, "actions": all_actions, "params": params}, f) # Directly pickle train_state.params
             print(f"New observations for player 0saved to (pickle): logs/obs.pkl")
     return dict(action=actions.tolist())
 
