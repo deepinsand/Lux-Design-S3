@@ -306,38 +306,28 @@ def make_train(config, writer, env=None, env_params=None):
             tx=tx,
         )
 
+        def sample_params(rng_key):
+            randomized_game_params = dict()
+            for k, v in env_params_ranges.items():
+                rng_key, subkey = jax.random.split(rng_key)
+                if isinstance(v[0], int):
+                    randomized_game_params[k] = jax.random.choice(subkey, jax.numpy.array(v, dtype=jnp.int16))
+                else:
+                    randomized_game_params[k] = jax.random.choice(subkey, jax.numpy.array(v, dtype=jnp.float32))
+            params = EnvParams(**randomized_game_params)
+            return params
+
         # INIT ENV
         rng, _rng = jax.random.split(rng)
+        env_params_randomized = debuggable_vmap(sample_params)(jax.random.split(_rng, config["NUM_ENVS"]))
+
+        rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-        obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, None))(reset_rng, env_params) # this is thrown away immediately since env is reset in mod 0
+        obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, 0))(reset_rng, env_params_randomized) # this is thrown away immediately since env is reset in mod 0
 
         # TRAIN LOOP
         def _update_step(update_count, runner_state):
             
-            train_state, old_env_state, old_obsv, rng = runner_state
-
-            # sample random params initially
-            def sample_params(rng_key):
-                randomized_game_params = dict()
-                for k, v in env_params_ranges.items():
-                    rng_key, subkey = jax.random.split(rng_key)
-                    if isinstance(v[0], int):
-                        randomized_game_params[k] = jax.random.choice(subkey, jax.numpy.array(v, dtype=jnp.int16))
-                    else:
-                        randomized_game_params[k] = jax.random.choice(subkey, jax.numpy.array(v, dtype=jnp.float32))
-                params = EnvParams(**randomized_game_params)
-                return params
-
-            rng, subkey = jax.random.split(rng)
-            env_params = debuggable_vmap(sample_params)(jax.random.split(subkey, config["NUM_ENVS"]))
-
-            rng, _rng = jax.random.split(rng)
-            reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-            reset_obsv, reset_env_state = debuggable_vmap(env.reset, in_axes=(0, 0, 0))(reset_rng, env_params, old_env_state) # pass in old_env_state for log and normalize state
-
-            # the num_steps should be 101, so we hardcode 5 matches here.  shorter trajectories should mean faster training
-            obsv, env_state = jax.lax.cond(update_count % 5 == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
-
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, (last_obs_0, last_obs_1), rng = runner_state
@@ -362,7 +352,7 @@ def make_train(config, writer, env=None, env_params=None):
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
                 obsv, env_state, (reward_0, reward_1), done, info = debuggable_vmap(
                     env.step, in_axes=(0, 0, 0, 0)
-                )(rng_step, env_state, action, env_params)
+                )(rng_step, env_state, action, env_params_randomized)
 
                 transition_0 = Transition(
                     done, action_0, value_0, reward_0, log_prob_0, last_obs_0, info
@@ -372,8 +362,6 @@ def make_train(config, writer, env=None, env_params=None):
                 )
                 runner_state = (train_state, env_state, obsv, rng)
                 return runner_state, (transition_0, transition_1)
-
-            runner_state = (train_state, env_state, obsv, rng)
 
             runner_state, (traj_batch_0, traj_batch_1) = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
@@ -572,7 +560,7 @@ def make_train(config, writer, env=None, env_params=None):
             return runner_state
 
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, env_state, obsv, _rng) # env_state and obsv are thrown away from that first reset
+        runner_state = (train_state, env_state, obsv, _rng) # env_state and obsv come from the reset
         runner_state = jax.lax.fori_loop(0, config["NUM_UPDATES"], _update_step, runner_state)
 
         return {"runner_state": runner_state}

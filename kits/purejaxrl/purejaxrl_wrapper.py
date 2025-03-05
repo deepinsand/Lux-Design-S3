@@ -758,20 +758,17 @@ class NormalizeVecReward(GymnaxWrapper):
         super().__init__(env)
         self.gamma = gamma
 
-    def reset(self, key, params=None, old_state=None):
+    def reset(self, key, params=None):
+        obs, state = self._env.reset(key, params)
         batch_count = 1
-        if old_state is not None:
-            obs, state = self._env.reset(key, params, old_state.env_state)
-            state = NormalizeVecRewEnvState(env_state=state, mean=old_state.mean, var=old_state.var, count=old_state.count, return_val=old_state.return_val)
-        else:
-            obs, state = self._env.reset(key, params)
-            state = NormalizeVecRewEnvState(
-                mean=0.0,
-                var=1.0,
-                count=1e-4,
-                return_val=jnp.zeros((batch_count,)),
-                env_state=state,
-            )
+
+        state = NormalizeVecRewEnvState(
+            mean=0.0,
+            var=1.0,
+            count=1e-4,
+            return_val=jnp.zeros((batch_count,)),
+            env_state=state,
+        )
         return obs, state
 
     def step(self, key, state, action, params=None):
@@ -827,20 +824,11 @@ class LogWrapper(GymnaxWrapper):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None, old_state: Optional[LogEnvState] = None,
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState]:
         obs, env_state = self._env.reset(key, params)
-        if old_state is not None:
-             state = LogEnvState(
-                env_state=env_state, # importantly keep the new env_state from the reset
-                episode_returns=old_state.episode_returns,
-                episode_lengths=old_state.episode_lengths,
-                returned_episode_returns=old_state.returned_episode_returns,
-                returned_episode_lengths=old_state.returned_episode_lengths,
-                timestep=old_state.timestep,
-             )
-        else:
-            state = LogEnvState(env_state, 0, 0, 0, 0, 0)
+
+        state = LogEnvState(env_state, 0, 0, 0, 0, 0)
         return obs, state
 
     @partial(jax.jit, static_argnums=(0,))

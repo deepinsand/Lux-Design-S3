@@ -31,7 +31,7 @@ if __name__ == "__main__":
     rng = jax.random.PRNGKey(42)
 
     env_params = EnvParams()
-    env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_params)
+    env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
     wrapped_env = LuxaiS3GymnaxWrapper(env)
 
 
