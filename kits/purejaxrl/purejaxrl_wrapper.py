@@ -539,7 +539,6 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # this is also symmetric nebula tile movement # 
         # Drift speed is not known!!!
         
-        # jax.debug.print("ever_different: {}, step: {}, params: {}", ever_different, obs.steps, params.nebula_tile_drift_speed)
 
         def two_maps_agree(map1, map2):
             map1_mask = map1 != -1
@@ -560,15 +559,24 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             # drift speed is not 0, so this helps us with the unknown case, represented here as 0
             return ((drift_speed * positive_drift_confirmation) + (drift_speed * negative_drift_confirmation * -1.)) * not_both_confirmed
 
-        drift_speed_guess = jax.lax.cond((obs.steps > 7) & observed_different & (state.drift_speed_guess == 0.), calculate_drift_speed, lambda: state.drift_speed_guess)
         
-        drifted_symmetrical_tile_type_last_round = self.drift_map(state.symmetrical_tile_type_last_round, obs.steps - 1, drift_speed_guess)
+        drift_speed_guess = jax.lax.cond((obs.steps > 7) & observed_different, calculate_drift_speed, lambda: state.drift_speed_guess)
+        
+        # Only drift the map from last round if we guessed a new drift speed
+        drifted_symmetrical_tile_type_last_round = jax.lax.cond((obs.steps > 7) & observed_different, 
+                                                                lambda: self.drift_map(state.symmetrical_tile_type_last_round, obs.steps - 1, drift_speed_guess), 
+                                                                lambda: state.symmetrical_tile_type_last_round)
+
         drifted_confirmed_with_observed = two_maps_agree(drifted_symmetrical_tile_type_last_round, symmetrical_tile_type)
+        combined_stateful_map_and_current_obs = jnp.maximum(symmetrical_tile_type, drifted_symmetrical_tile_type_last_round)
+        symmetrical_tile_type_next_round =  self.drift_map(combined_stateful_map_and_current_obs, obs.steps, drift_speed_guess)
+
+        #jax.debug.print("drifted_confirmed_with_observed: {}, step: {}, params: {}", drifted_confirmed_with_observed, obs.steps, drift_speed_guess)
 
         # this should only happen if somehow on the 8th step, there was a drift but it was unobserved.  
         symmetrical_tile_type = jax.lax.cond(
             drifted_confirmed_with_observed, 
-            lambda: jnp.maximum(symmetrical_tile_type, drifted_symmetrical_tile_type_last_round),
+            lambda: symmetrical_tile_type_next_round.astype(jnp.int16),
             lambda: symmetrical_tile_type.astype(jnp.int16)
         )
 
@@ -749,6 +757,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_4d = unit_3d[:, :, jnp.newaxis, :] == asteroid_pos[jnp.newaxis, jnp.newaxis, :, :]
         any_collisions = unit_4d.all(axis=3) # last dimension is of shape 2, representing x,y coordinates.  Need all to match for collision
         asteroid_mask = ~any_collisions.any(axis=2) # last dimension is of shape num_asteriods, and the action is invalid if it hits any asteroid
+
+        # TODO: MAKE IT OK TO SIT ON ASTEROID IF YOU'RE ON AN EP
         action_mask = action_mask & asteroid_mask
 
         return action_mask
