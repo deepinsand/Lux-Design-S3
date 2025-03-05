@@ -600,17 +600,17 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         param_list = jnp.array([
             params.unit_move_cost / float(env_params_ranges["unit_move_cost"][-1]),
-            #params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
+            params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
             params.nebula_tile_vision_reduction / float(env_params_ranges["nebula_tile_vision_reduction"][-1]),
             params.nebula_tile_energy_reduction / float(env_params_ranges["nebula_tile_energy_reduction"][-1]),
             params.unit_sap_cost / float(env_params_ranges["unit_sap_cost"][-1]),
             params.unit_sap_range / float(env_params_ranges["unit_sap_range"][-1]),
-            #params.unit_sap_dropoff_factor / float(env_params_ranges["unit_sap_dropoff_factor"][-1]),
+            params.unit_sap_dropoff_factor / float(env_params_ranges["unit_sap_dropoff_factor"][-1]),
             params.unit_energy_void_factor / float(env_params_ranges["unit_energy_void_factor"][-1]),
             # map randomizations
-            #params.nebula_tile_drift_speed / float(env_params_ranges["nebula_tile_drift_speed"][-1]),
-            #params.energy_node_drift_speed / float(env_params_ranges["energy_node_drift_speed"][-1]),
-            #params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
+            params.nebula_tile_drift_speed / float(env_params_ranges["nebula_tile_drift_speed"][-1]),
+            params.energy_node_drift_speed / float(env_params_ranges["energy_node_drift_speed"][-1]),
+            params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
         ])
 
         new_observation = WrappedEnvObs(

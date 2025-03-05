@@ -285,7 +285,7 @@ def make_train(config, writer, env=None, env_params=None):
             value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
             action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
-            param_list=fill_zeroes((6,), dtype=jnp.float32),
+            param_list=fill_zeroes((11,), dtype=jnp.float32),
         )
 
 
