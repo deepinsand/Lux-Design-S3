@@ -14,7 +14,7 @@ import math
 from jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
 import functools
 from luxai_s3.params import EnvParams, env_params_ranges
-from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs, NormalizeVecReward, LogWrapper
+from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs, NormalizeVecReward, LogWrapper, init_empty_obs
 from luxai_s3.env import LuxAIS3Env
 
 
@@ -101,6 +101,7 @@ class EmbeddingEncoder(nn.Module):
                 obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis],
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 #obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
+                obs.sensor_last_visit_normalized[..., jnp.newaxis],
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis],
                 obs.value_of_sapping_grid[..., jnp.newaxis],
@@ -267,30 +268,7 @@ def make_train(config, writer):
             [action_space.shape[0], action_space.n], activation=config["ACTIVATION"], quick=(not config["CONVOLUTIONS"])
         )
         rng, _rng = jax.random.split(rng)
-        def fill_zeroes(shape, dtype=jnp.int16):
-            return jnp.zeros((config["NUM_ENVS"], *shape), dtype=dtype)
-    
-        init_x = WrappedEnvObs(
-            relic_map=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height)),
-            normalized_unit_counts=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            normalized_unit_counts_opp=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            normalized_unit_energys_max_grid=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            normalized_unit_energys_max_grid_opp=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            tile_type=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height)),
-            normalized_energy_field=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            unit_positions=fill_zeroes((fixed_env_params.max_units, 2)),
-            unit_mask=fill_zeroes((fixed_env_params.max_units,)),
-            normalized_steps=fill_zeroes((), dtype=jnp.float32),
-            grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            value_of_sapping_grid=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            sensor_mask=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
-            action_mask=fill_zeroes((fixed_env_params.max_units, 6), dtype=jnp.bool),
-            param_list=fill_zeroes((11,), dtype=jnp.float32),
-        )
+        init_x = init_empty_obs(fixed_env_params, config["NUM_ENVS"])
 
 
         network_params = network.init(_rng, init_x)

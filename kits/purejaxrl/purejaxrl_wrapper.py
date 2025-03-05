@@ -76,8 +76,36 @@ class WrappedEnvObs:
     grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
     value_of_sapping_grid: chex.Array
     sensor_mask: chex.Array
+    sensor_last_visit_normalized: chex.Array
     action_mask: chex.Array
     param_list: chex.Array
+
+def init_empty_obs(env_params, num_envs):
+    def fill_zeroes(shape, dtype=jnp.int16):
+        return jnp.zeros((num_envs, *shape), dtype=dtype)
+    
+    return WrappedEnvObs(
+        relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
+        normalized_unit_counts=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_counts_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_energys_max_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        normalized_unit_energys_max_grid_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
+        normalized_energy_field=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        unit_positions=fill_zeroes((env_params.max_units, 2)),
+        unit_mask=fill_zeroes((env_params.max_units,)),
+        normalized_steps=fill_zeroes((), dtype=jnp.float32),
+        grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
+        param_list=fill_zeroes((11,), dtype=jnp.float32),
+    )
 
 @struct.dataclass
 class StatefulEnvState:
@@ -383,7 +411,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         sensor_last_visit = state.sensor_last_visit * sensor_mask_inverse # will set last_visit  to 0 wherever the sensors are visible
         sensor_last_visit = sensor_last_visit + current_step_last_visit # will set last_visit to obs.match_steps wherever the sensors are visible
         sensor_last_visit_symmetrical = jnp.maximum(sensor_last_visit, sensor_last_visit[::-1, ::-1].T) # Relics are spawned symetrricallys, so the sensor visit from the POV of the relics can be symmetrical
-
+        sensor_last_visit_normalized = sensor_last_visit / float(max_steps_in_episode + self.fixed_env_params.match_count_per_episode)
 
         last_relic_spawn_point = (self.fixed_env_params.max_steps_in_match * 5) // 2 # state.py:348 shows spawn schedule
         has_seen_everywhere_after_match_1 = jnp.all(sensor_last_visit_symmetrical > last_relic_spawn_point)
@@ -614,6 +642,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             params.energy_node_drift_magnitude / float(env_params_ranges["energy_node_drift_magnitude"][-1]),
         ])
 
+        # add sensor last visit?
         new_observation = WrappedEnvObs(
             relic_map=relic_map, # not used
             normalized_unit_counts=normalized_unit_counts,
@@ -625,6 +654,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             unit_positions=unit_positions,
             unit_mask=unit_mask,
             sensor_mask=sensor_mask.astype(jnp.float32),
+            sensor_last_visit_normalized=sensor_last_visit_normalized,
             normalized_steps=normalized_steps,
             grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
@@ -749,15 +779,18 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         match_win_summed = (match_over).astype(jnp.int16) * (has_won.astype(jnp.int16) * 2 - 1) # win is 1, loss is -1
 
+        new_spaces_visited = (new_state.sensor_last_visit > -1).astype(jnp.int16).sum() - (old_state.sensor_last_visit > -1).astype(jnp.int16).sum()
+
         def progress_shape_rate(cutoff):
             stopping_point = float(self.total_updates) * cutoff
             return 1. - (jnp.minimum(update_count, stopping_point) / stopping_point)
         
         match_win_summed = match_win_summed * 1
-        diff_wins_summed = diff_points_summed * 1 * (progress_shape_rate(0.7))
-        diff_points_summed = diff_points_summed * 1 * (progress_shape_rate(0.3))
+        diff_wins_summed = diff_wins_summed * 1 * (progress_shape_rate(0.7))
+        diff_points_summed = diff_points_summed * 1 #* (progress_shape_rate(0.3))
+        new_spaces_visited_summed = new_spaces_visited * 1 *  (progress_shape_rate(0.5))
 
-        return match_win_summed + diff_wins_summed + diff_points_summed
+        return diff_points_summed + new_spaces_visited_summed
     
 
 @struct.dataclass
