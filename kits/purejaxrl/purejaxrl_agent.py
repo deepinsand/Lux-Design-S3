@@ -61,7 +61,7 @@ class Agent():
 
     @partial(jax.jit, static_argnums=(0,))
     def get_action(self, env_state, env_obs, rng_act):
-        new_obs, env_state = self.env.transform_obs(env_obs, env_state, self.env_cfg, self.team_id, self.opp_team_id)
+        new_obs, env_state, _ = self.env.transform_obs(env_obs, env_state, self.env_cfg, self.team_id, self.opp_team_id)
 
         new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
 

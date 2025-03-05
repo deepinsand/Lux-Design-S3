@@ -125,6 +125,11 @@ class StatefulEnvState:
     candidate_sap_locations: chex.Array
 
 @struct.dataclass
+class RewardInfo:
+    unit_counts: chex.Array
+
+
+@struct.dataclass
 class WrappedEnvState:
     original_state: EnvState
     stateful_data_0: StatefulEnvState
@@ -175,8 +180,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     #@partial(jax.jit, static_argnums=(0,))
     def reset(self, key, params=None):
         obs, state = self._env.reset(key, params)
-        obs_0, stateful_data_0 = self.transform_obs(obs["player_0"], self.empty_stateful_env_state(), params, 0, 1)
-        obs_1, stateful_data_1 = self.transform_obs(obs["player_1"], self.empty_stateful_env_state(), params, 1, 0)
+        obs_0, stateful_data_0, _ = self.transform_obs(obs["player_0"], self.empty_stateful_env_state(), params, 0, 1)
+        obs_1, stateful_data_1, _ = self.transform_obs(obs["player_1"], self.empty_stateful_env_state(), params, 1, 0)
         return (obs_0, obs_1), WrappedEnvState(original_state=state, stateful_data_0=stateful_data_0, stateful_data_1=stateful_data_1)
     
     
@@ -216,13 +221,13 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             prev_stateful_data_0 = wrapped_state.stateful_data_0
             prev_stateful_data_1 = wrapped_state.stateful_data_1
 
-        new_obs_0, stateful_data_0 = self.transform_obs(obs["player_0"], prev_stateful_data_0, params, 0, 1)
-        new_obs_1, stateful_data_1 = self.transform_obs(obs["player_1"], prev_stateful_data_1, params, 1, 0)
+        new_obs_0, stateful_data_0, reward_info_0 = self.transform_obs(obs["player_0"], prev_stateful_data_0, params, 0, 1)
+        new_obs_1, stateful_data_1, reward_info_1 = self.transform_obs(obs["player_1"], prev_stateful_data_1, params, 1, 0)
 
         info["real_reward"] = self.extract_differece_points_for_player(stateful_data_0, prev_stateful_data_0, 0)
 
-        manufactured_reward_0 = self.extract_manufactured_reward(stateful_data_0, prev_stateful_data_0, 0, 1, update_count)
-        manufactured_reward_1 = self.extract_manufactured_reward(stateful_data_1, prev_stateful_data_1, 1, 0, update_count)
+        manufactured_reward_0 = self.extract_manufactured_reward(stateful_data_0, prev_stateful_data_0, 0, 1, update_count, reward_info_0)
+        manufactured_reward_1 = self.extract_manufactured_reward(stateful_data_1, prev_stateful_data_1, 1, 0, update_count, reward_info_1)
 
         #jax.debug.print("team_points: {}, reward: {}, cond: {}", state.team_points, manufactured_reward, jnp.any(state.team_points))
         #debuggable_conditional_breakpoint(jnp.any(state.team_points))
@@ -682,7 +687,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      candidate_sap_locations=candidate_sap_locations,
                                      )
         
-        return new_observation, new_state
+        reward_info = RewardInfo(unit_counts=unit_counts)
+        
+        return new_observation, new_state, reward_info
     
     
     def action_mask(self, unit_positions, asteroid_grid):
@@ -748,7 +755,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         return diff_points_summed
     
     
-    def extract_manufactured_reward(self, new_state, old_state, team_id, opp_team_id, update_count):
+    def extract_manufactured_reward(self, new_state, old_state, team_id, opp_team_id, update_count, reward_info):
 
         new_team_points = jnp.array(new_state.team_points)
         new_team_wins = jnp.array(new_state.team_wins)
@@ -780,6 +787,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         match_win_summed = (match_over).astype(jnp.int16) * (has_won.astype(jnp.int16) * 2 - 1) # win is 1, loss is -1
 
         new_spaces_visited = (new_state.sensor_last_visit > -1).astype(jnp.int16).sum() - (old_state.sensor_last_visit > -1).astype(jnp.int16).sum()
+        occupied_same_space = (reward_info.unit_counts > 1).astype(jnp.int16).sum()
 
         def progress_shape_rate(cutoff):
             stopping_point = float(self.total_updates) * cutoff
@@ -788,9 +796,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         match_win_summed = match_win_summed * 1
         diff_wins_summed = diff_wins_summed * 1 * (progress_shape_rate(0.7))
         diff_points_summed = diff_points_summed * 1 #* (progress_shape_rate(0.3))
-        new_spaces_visited_summed = new_spaces_visited * 1 *  (progress_shape_rate(0.5))
+        new_spaces_visited_summed = new_spaces_visited * 1 * (progress_shape_rate(0.4))
+        occupied_same_space_summed = occupied_same_space * -1 * (progress_shape_rate(0.7))
 
-        return diff_points_summed + new_spaces_visited_summed
+        return diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed
     
 
 @struct.dataclass
