@@ -828,6 +828,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         match_win_summed = (match_over).astype(jnp.int16) * (has_won.astype(jnp.int16) * 2 - 1) # win is 1, loss is -1
 
+        # should you get awarded for jsut spawning?
         new_spaces_visited = (new_state.sensor_last_visit > -1).astype(jnp.int16).sum() - (old_state.sensor_last_visit > -1).astype(jnp.int16).sum()
         occupied_same_space = (reward_info.unit_counts > 1).astype(jnp.int16).sum()
 
@@ -835,14 +836,16 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             stopping_point = float(self.total_updates) * cutoff
             return 1. - (jnp.minimum(update_count, stopping_point) / stopping_point)
         
-        match_win_summed = match_win_summed * 1
-        diff_wins_summed = diff_wins_summed * 1 * (progress_shape_rate(0.7))
-        diff_points_summed = diff_points_summed * 1 #* (progress_shape_rate(0.3))
-        new_spaces_visited_summed = new_spaces_visited * 1 * (progress_shape_rate(0.4))
-        occupied_same_space_summed = occupied_same_space * -1 * (progress_shape_rate(0.7))
+        match_win_summed = match_win_summed * 100
+        diff_wins_summed = diff_wins_summed * 20 * (progress_shape_rate(0.8))
+        diff_points_summed = diff_points_summed * 1 * (progress_shape_rate(0.6))
+        new_spaces_visited_summed = new_spaces_visited * 0.2 * (progress_shape_rate(0.2))
+        occupied_same_space_summed = occupied_same_space * -0.4 * (progress_shape_rate(0.2))
 
-        return diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed
-    
+        reward = match_win_summed + diff_wins_summed + diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed
+
+
+        return reward
 
 @struct.dataclass
 class NormalizeVecRewEnvState:
