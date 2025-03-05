@@ -479,19 +479,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # Shift objects around in space
         # Move the nebula tiles in state.map_features.tile_types up by 1 and to the right by 1
         # this is also symmetric nebula tile movement
-        new_tile_types_map = jnp.roll(
-            state.symmetrical_tile_type_last_round,
-            shift=(
-                1 * jnp.sign(params.nebula_tile_drift_speed),
-                -1 * jnp.sign(params.nebula_tile_drift_speed),
-            ),
-            axis=(0, 1),
-        )
-        new_tile_types_map = jnp.where(
-            (obs.steps - 2) * abs(params.nebula_tile_drift_speed) % 1 > (obs.steps - 1) * abs(params.nebula_tile_drift_speed) % 1,
-            new_tile_types_map,
-            state.symmetrical_tile_type_last_round,
-        )
+
 
         # symmetrical_tile_type_mask = symmetrical_tile_type != -1
         # new_tile_types_map_mask = new_tile_types_map != -1
@@ -500,13 +488,27 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # ever_different = differs.any()
         # jax.debug.print("ever_different: {}, step: {}", ever_different, obs.steps)
 
-        symmetrical_tile_type = jnp.maximum(symmetrical_tile_type, new_tile_types_map)
+        symmetrical_tile_type = jnp.maximum(symmetrical_tile_type, state.symmetrical_tile_type_last_round)
+
+        symmetrical_tile_type_next_round = jnp.roll(
+            symmetrical_tile_type,
+            shift=(
+                1 * jnp.sign(params.nebula_tile_drift_speed),
+                -1 * jnp.sign(params.nebula_tile_drift_speed),
+            ),
+            axis=(0, 1),
+        )
+        symmetrical_tile_type_next_round = jnp.where(
+            (obs.steps - 2) * abs(params.nebula_tile_drift_speed) % 1 > (obs.steps - 1) * abs(params.nebula_tile_drift_speed) % 1,
+            symmetrical_tile_type_next_round,
+            symmetrical_tile_type,
+        )
+
+        symmetrical_tile_type = symmetrical_tile_type_next_round
         
         match_over = self.is_match_over(obs, state)
         
         # If there are no points, we need to do probability all relics being spawned
-
-
 
         grid_unit_mask_float = grid_unit_mask.astype(jnp.float32)
         inverse_grid_unit_mask_float = 1. - grid_unit_mask_float
