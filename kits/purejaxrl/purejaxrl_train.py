@@ -16,11 +16,8 @@ import shutil  # For copying files
 import flax
 import pickle
 
-from luxai_s3.params import EnvParams, env_params_ranges
-from luxai_s3.env import LuxAIS3Env
 from purejaxrl_ppo import make_train
 
-from purejaxrl_wrapper import LuxaiS3GymnaxWrapper
 
 from flax.metrics import tensorboard
 
@@ -30,9 +27,6 @@ if __name__ == "__main__":
 
     rng = jax.random.PRNGKey(42)
 
-    env_params = EnvParams()
-    env = LuxAIS3Env(auto_reset=True, fixed_env_params=env_params)
-    wrapped_env = LuxaiS3GymnaxWrapper(env)
 
 
     log_dir = "logs"
@@ -48,7 +42,7 @@ if __name__ == "__main__":
     if config["PROFILE"]:
         jax.profiler.start_trace(log_subdir)
     
-    train_fn = make_train(config, summary_writer, wrapped_env, env_params)
+    train_fn = make_train(config, summary_writer)
 
     #train_fn = jax.experimental.checkify.checkify(train_fn)
 

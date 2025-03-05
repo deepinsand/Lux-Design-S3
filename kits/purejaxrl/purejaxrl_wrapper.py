@@ -106,8 +106,9 @@ class WrappedEnvState:
 class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     """Flatten the observations of the environment."""
 
-    def __init__(self, env: environment.Environment):
+    def __init__(self, env: environment.Environment, total_updates=None):
         super().__init__(env)
+        self.total_updates = total_updates
 
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
@@ -154,7 +155,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, key, wrapped_state, action, params=None):
+    def step(self, key, wrapped_state, action, params=None, update_count=None):
 
         sap_action_0 = jnp.zeros((self.fixed_env_params.max_units, 3), dtype=jnp.int16)
         sap_action_0 = sap_action_0.at[:, 0].set(action[0])
@@ -192,8 +193,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         info["real_reward"] = self.extract_differece_points_for_player(stateful_data_0, prev_stateful_data_0, 0)
 
-        manufactured_reward_0 = self.extract_manufactured_reward(stateful_data_0, prev_stateful_data_0, 0)
-        manufactured_reward_1 = self.extract_manufactured_reward(stateful_data_1, prev_stateful_data_1, 1)
+        manufactured_reward_0 = self.extract_manufactured_reward(stateful_data_0, prev_stateful_data_0, 0, 1, update_count)
+        manufactured_reward_1 = self.extract_manufactured_reward(stateful_data_1, prev_stateful_data_1, 1, 0, update_count)
 
         #jax.debug.print("team_points: {}, reward: {}, cond: {}", state.team_points, manufactured_reward, jnp.any(state.team_points))
         #debuggable_conditional_breakpoint(jnp.any(state.team_points))
@@ -717,7 +718,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         return diff_points_summed
     
     
-    def extract_manufactured_reward(self, new_state, old_state, team_id):
+    def extract_manufactured_reward(self, new_state, old_state, team_id, opp_team_id, update_count):
 
         new_team_points = jnp.array(new_state.team_points)
         new_team_wins = jnp.array(new_state.team_wins)
@@ -728,20 +729,35 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_points = new_team_points - old_team_points
         diff_wins = new_team_wins - old_team_wins
 
-        #match = new_team_wins.sum()
+        diff_dot_product = jnp.full(2, -1, dtype=jnp.int16)
+        diff_dot_product = diff_dot_product.at[team_id].set(1)
 
-        # TODO: Subtract points from other team from your score
-        point_dot_product = jnp.full(2, -1, dtype=jnp.int16)
-        point_dot_product = point_dot_product.at[team_id].set(1)
+        match_over = new_team_wins.sum() == 5
+        has_won = new_state.team_wins[team_id] > new_state.team_wins[opp_team_id]
 
         # On steps mod 101, the points are wiped out but the wins change.
         diff_points_summed = jax.lax.cond(
             jnp.any(diff_wins),
             lambda: 0,
-            lambda: jnp.dot(diff_points, point_dot_product)
+            lambda: jnp.dot(diff_points, diff_dot_product)
+        )
+        diff_wins_summed = jax.lax.cond(
+            match_over,
+            lambda: 0,
+            lambda: jnp.dot(diff_wins, diff_dot_product)
         )
 
-        return diff_points_summed
+        match_win_summed = (match_over).astype(jnp.int16) * (has_won.astype(jnp.int16) * 2 - 1) # win is 1, loss is -1
+
+        def progress_shape_rate(cutoff):
+            stopping_point = float(self.total_updates) * cutoff
+            return 1. - (jnp.minimum(update_count, stopping_point) / stopping_point)
+        
+        match_win_summed = match_win_summed * 1
+        diff_wins_summed = diff_points_summed * 1 * (progress_shape_rate(0.7))
+        diff_points_summed = diff_points_summed * 1 * (progress_shape_rate(0.3))
+
+        return match_win_summed + diff_wins_summed + diff_points_summed
     
 
 @struct.dataclass
@@ -771,9 +787,9 @@ class NormalizeVecReward(GymnaxWrapper):
         )
         return obs, state
 
-    def step(self, key, state, action, params=None):
+    def step(self, key, state, action, params=None, update_count=None):
         obs, env_state, (reward_0, reward_1), done, info = self._env.step(
-            key, state.env_state, action, params
+            key, state.env_state, action, params, update_count
         )
 
         reward_sum = jnp.absolute(jnp.array([reward_0, reward_1])).sum()
@@ -838,10 +854,12 @@ class LogWrapper(GymnaxWrapper):
         state: environment.EnvState,
         action: Union[int, float],
         params: Optional[environment.EnvParams] = None,
+        update_count=None
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
         obs, env_state, reward, done, info = self._env.step(
-            key, state.env_state, action, params
+            key, state.env_state, action, params, update_count
         )
+
         real_reward = info["real_reward"]
         new_episode_return = state.episode_returns + real_reward
         new_episode_length = state.episode_lengths + 1

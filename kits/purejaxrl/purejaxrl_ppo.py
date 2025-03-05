@@ -14,7 +14,10 @@ import math
 from jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
 import functools
 from luxai_s3.params import EnvParams, env_params_ranges
-from purejaxrl_wrapper import WrappedEnvObs, NormalizeVecReward, LogWrapper
+from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs, NormalizeVecReward, LogWrapper
+from luxai_s3.env import LuxAIS3Env
+
+
 
 # Re-use the ResNet block and convolutional encoder from before.
 class ResNetBlock(nn.Module):
@@ -233,7 +236,7 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def make_train(config, writer, env=None, env_params=None):
+def make_train(config, writer):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
@@ -242,9 +245,10 @@ def make_train(config, writer, env=None, env_params=None):
     config["MINIBATCH_SIZE"] = (
         2 * config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    if env is None and env_params is None:
-        env, env_params = gymnax.make(config["ENV_NAME"])
-
+    
+    fixed_env_params = EnvParams()
+    env = LuxAIS3Env(auto_reset=True, fixed_env_params=fixed_env_params)
+    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"])
     env = LogWrapper(env)  # Log rewards before normalizing 
     env = NormalizeVecReward(env, config["GAMMA"])
 
@@ -258,7 +262,7 @@ def make_train(config, writer, env=None, env_params=None):
 
     def train(rng):
         # INIT NETWORK
-        action_space = env.action_space(env_params)
+        action_space = env.action_space(fixed_env_params)
         network = ActorCritic(
             [action_space.shape[0], action_space.n], activation=config["ACTIVATION"], quick=(not config["CONVOLUTIONS"])
         )
@@ -267,24 +271,24 @@ def make_train(config, writer, env=None, env_params=None):
             return jnp.zeros((config["NUM_ENVS"], *shape), dtype=dtype)
     
         init_x = WrappedEnvObs(
-            relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
-            normalized_unit_counts=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            normalized_unit_counts_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            normalized_unit_energys_max_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            normalized_unit_energys_max_grid_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
-            normalized_energy_field=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            unit_positions=fill_zeroes((env_params.max_units, 2)),
-            unit_mask=fill_zeroes((env_params.max_units,)),
+            relic_map=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height)),
+            normalized_unit_counts=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            normalized_unit_counts_opp=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            normalized_unit_energys_max_grid=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            normalized_unit_energys_max_grid_opp=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            tile_type=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height)),
+            normalized_energy_field=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            unit_positions=fill_zeroes((fixed_env_params.max_units, 2)),
+            unit_mask=fill_zeroes((fixed_env_params.max_units,)),
             normalized_steps=fill_zeroes((), dtype=jnp.float32),
-            grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            value_of_sapping_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
-            action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
+            grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            value_of_sapping_grid=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            sensor_mask=fill_zeroes((fixed_env_params.map_width, fixed_env_params.map_height), dtype=jnp.float32),
+            action_mask=fill_zeroes((fixed_env_params.max_units, 6), dtype=jnp.bool),
             param_list=fill_zeroes((11,), dtype=jnp.float32),
         )
 
@@ -323,7 +327,7 @@ def make_train(config, writer, env=None, env_params=None):
 
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-        obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, 0))(reset_rng, env_params_randomized) # this is thrown away immediately since env is reset in mod 0
+        obsv, env_state = debuggable_vmap(env.reset, in_axes=(0, 0))(reset_rng, env_params_randomized)
 
         # TRAIN LOOP
         def _update_step(update_count, runner_state):
@@ -351,8 +355,8 @@ def make_train(config, writer, env=None, env_params=None):
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
                 obsv, env_state, (reward_0, reward_1), done, info = debuggable_vmap(
-                    env.step, in_axes=(0, 0, 0, 0)
-                )(rng_step, env_state, action, env_params_randomized)
+                    env.step, in_axes=(0, 0, 0, 0, None)
+                )(rng_step, env_state, action, env_params_randomized, update_count)
 
                 transition_0 = Transition(
                     done, action_0, value_0, reward_0, log_prob_0, last_obs_0, info
