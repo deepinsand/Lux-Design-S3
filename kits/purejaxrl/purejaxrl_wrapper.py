@@ -104,7 +104,7 @@ def init_empty_obs(env_params, num_envs):
         sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
-        param_list=fill_zeroes((4,), dtype=jnp.float32),
+        param_list=fill_zeroes((6,), dtype=jnp.float32),
     )
 
 @struct.dataclass
@@ -522,6 +522,13 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_energys_opp = jnp.array(obs.units.energy[opp_team_id]) # shape (max_units, 1)
         unit_energys_max_grid_opp = self.compute_energy_map_max(unit_positions_opp, unit_mask_opp, unit_energys_opp)
 
+        diff_dot_product = jnp.full(2, -1, dtype=jnp.int16)
+        diff_dot_product = diff_dot_product.at[team_id].set(1)
+ 
+        difference_points_normalized = jnp.dot(obs.team_points, diff_dot_product) / (self.fixed_env_params.max_units * self.fixed_env_params.max_steps_in_match / 2)
+        difference_wins_normalized = jnp.dot(obs.team_wins, diff_dot_product) / self.fixed_env_params.match_count_per_episode
+        
+    
         normalized_unit_energys_max_grid_opp = unit_energys_max_grid_opp.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
         energy_field_with_extra_mask = obs.map_features.energy - (sensor_mask_inverse * self.fixed_env_params.max_energy_per_tile)
@@ -683,6 +690,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             params.unit_sensor_range / float(env_params_ranges["unit_sensor_range"][-1]),
             params.unit_sap_cost / float(env_params_ranges["unit_sap_cost"][-1]),
             params.unit_sap_range / float(env_params_ranges["unit_sap_range"][-1]),
+            difference_points_normalized,
+            difference_wins_normalized,
         ])
 
         # add sensor last visit?
