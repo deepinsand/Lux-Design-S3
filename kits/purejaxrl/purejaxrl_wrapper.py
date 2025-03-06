@@ -7,6 +7,7 @@ from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 
+from benchmark_bitwise_and import create_centered_mask, extract_32bit_from_grid_mask, get_certain_positions, reconstruct_grid_from_subsection_bit_mask
 from luxai_s3.params import EnvParams, env_params_ranges
 from luxai_s3.state import (
     ASTEROID_TILE,
@@ -79,6 +80,8 @@ class WrappedEnvObs:
     sensor_last_visit_normalized: chex.Array
     action_mask: chex.Array
     param_list: chex.Array
+    solved_energy_points_grid_mask: chex.Array
+    known_energy_points_grid_mask: chex.Array
 
 def init_empty_obs(env_params, num_envs):
     def fill_zeroes(shape, dtype=jnp.int16):
@@ -105,8 +108,9 @@ def init_empty_obs(env_params, num_envs):
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
         param_list=fill_zeroes((6,), dtype=jnp.float32),
+        known_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
+        solved_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
     )
-
 @struct.dataclass
 class StatefulEnvState:
     discovered_relic_nodes_mask: chex.Array
@@ -124,6 +128,10 @@ class StatefulEnvState:
     symmetrical_tile_type_last_round: chex.Array
     candidate_sap_locations: chex.Array
     drift_speed_guess: float
+    stored_unit_masks_around_relics: chex.Array
+    stored_rewards: chex.Array
+    solved_energy_points_grid_mask: chex.Array
+    known_energy_points_grid_mask: chex.Array
 
 @struct.dataclass
 class RewardInfo:
@@ -143,7 +151,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     def __init__(self, env: environment.Environment, total_updates=None):
         super().__init__(env)
         self.total_updates = total_updates
-
+        #two_to_power_of_25 = 2**25
+        #self.every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
         return None # this is deeply coupled into train later
@@ -176,6 +185,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             symmetrical_tile_type_last_round=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
             drift_speed_guess=jnp.zeros((), dtype=jnp.float32),
+            known_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.bool),
+            solved_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.bool),
+            stored_unit_masks_around_relics=jnp.zeros(50, dtype=jnp.int32),
+            stored_rewards=jnp.zeros(50, dtype=jnp.int32),
         )
         return empty_data
     
@@ -647,6 +660,30 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # 6) combines by multiplying?
        
 
+        # SOLVER!!!!
+
+        # TODO: if a unit is definitely on an ep, we can still solve and subtract
+        #   
+        two_to_power_of_25 = 2**25
+        every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
+
+        mask_around_relic = create_centered_mask(discovered_relic_node_positions[0], n=self.fixed_env_params.map_width)
+        inverse_mask_around_relic = 1 - mask_around_relic
+        units_not_around_relic = inverse_mask_around_relic * grid_unit_mask
+        probabilty_units_not_around_relic_are_on_ep = grid_probability_of_being_energy_point_based_on_relic_positions * units_not_around_relic
+        positions_as_32_bit = extract_32bit_from_grid_mask(grid_unit_mask, discovered_relic_node_positions[0])
+        valid_to_store = discovered_relic_nodes_mask[0] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over)
+        valid_to_store = valid_to_store.astype(jnp.int32)
+
+        stored_unit_masks_around_relics = state.stored_unit_masks_around_relics.at[obs.steps % 50].set(positions_as_32_bit * valid_to_store)
+        stored_rewards = state.stored_rewards.at[obs.steps % 50].set(accumulated_points_last_round * valid_to_store)
+        solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics, stored_rewards)
+        solved_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[0], 
+                                                                                  self.fixed_env_params.map_width)
+        known_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[0], 
+                                                                                  self.fixed_env_params.map_width)
+        solved_energy_points_grid_mask = solved_energy_points_grid_mask | state.solved_energy_points_grid_mask
+        known_energy_points_grid_mask = known_energy_points_grid_mask | state.known_energy_points_grid_mask
 
         # TODO: account for units getting killed, check energy?
 
@@ -715,7 +752,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             grid_probability_of_being_an_energy_point_based_on_no_reward=grid_probability_of_being_an_energy_point_based_on_no_reward,
             value_of_sapping_grid=value_of_sapping_grid,
             action_mask=action_mask,
-            param_list=param_list
+            param_list=param_list,
+            solved_energy_points_grid_mask=solved_energy_points_grid_mask.astype(jnp.float32),
+            known_energy_points_grid_mask=known_energy_points_grid_mask.astype(jnp.float32),
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
@@ -733,8 +772,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      unit_mask_opp_last_round=unit_mask_opp,
                                      candidate_sap_locations=candidate_sap_locations,
                                      drift_speed_guess=drift_speed_guess,
-                               
-                                     )
+                                     stored_unit_masks_around_relics=stored_unit_masks_around_relics,
+                                     stored_rewards=stored_rewards,
+                                     solved_energy_points_grid_mask=solved_energy_points_grid_mask,
+                                     known_energy_points_grid_mask=known_energy_points_grid_mask,                               
+                                    )
         
         reward_info = RewardInfo(unit_counts=unit_counts)
         
@@ -820,7 +862,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_dot_product = jnp.full(2, -1, dtype=jnp.int16)
         diff_dot_product = diff_dot_product.at[team_id].set(1)
 
-        match_over = new_team_wins.sum() == 5
+        episode_over = new_team_wins.sum() == 5
         has_won = new_state.team_wins[team_id] > new_state.team_wins[opp_team_id]
 
         # On steps mod 101, the points are wiped out but the wins change.
@@ -830,12 +872,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             lambda: jnp.dot(diff_points, diff_dot_product)
         )
         diff_wins_summed = jax.lax.cond(
-            match_over,
+            episode_over,
             lambda: 0,
             lambda: jnp.dot(diff_wins, diff_dot_product)
         )
 
-        match_win_summed = (match_over).astype(jnp.int16) * (has_won.astype(jnp.int16) * 2 - 1) # win is 1, loss is -1
+        match_win_summed = (episode_over).astype(jnp.int16) * (has_won.astype(jnp.int16) * 2 - 1) # win is 1, loss is -1
 
         # should you get awarded for jsut spawning?
         new_spaces_visited = (new_state.sensor_last_visit > -1).astype(jnp.int16).sum() - (old_state.sensor_last_visit > -1).astype(jnp.int16).sum()
