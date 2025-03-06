@@ -320,7 +320,14 @@ def make_train(config, writer):
             reset_obsv, reset_env_state = debuggable_vmap(env.reset, in_axes=(0, 0, 0))(reset_rng, env_params_randomized, old_env_state) # pass in old_env_state for log and normalize state
 
             # the num_steps should be 101, so we hardcode 5 matches here.  shorter trajectories should mean faster training
-            obsv, env_state = jax.lax.cond(update_count % 1 == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
+            if config["NUM_STEPS"] == 505:
+                reset_every = 1
+            elif config["NUM_STEPS"] == 101:
+                reset_every = 5
+            else:    
+                raise
+            
+            obsv, env_state = jax.lax.cond(update_count % reset_every == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
 
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
