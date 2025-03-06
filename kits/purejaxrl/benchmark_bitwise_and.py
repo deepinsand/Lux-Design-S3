@@ -131,8 +131,22 @@ if __name__ == "__main__":
   # Create input data (as before)
   vector_size = 2**25
   large_vector = jnp.arange(vector_size, dtype=jnp.int32)
-  stored_masks = jnp.array([0, 1, 2, 3])
-  stored_rewards = jnp.array([0, 1, 1, 2])
+  #stored_masks = jnp.array([0, 1, 2, 3]) 
+  #stored_rewards = jnp.array([0, 1, 1, 2])
+
+
+  # 8913920 is
+#   subsection
+# Array([[0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0],
+#        [1, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 1],
+#        [0, 0, 0, 1, 0]], dtype=int16)
+  # with 11th, 20th adn 24th bit on.
+  # 11 comes back hot, but it should be unknown, since 20 and 24 never explored
+  # stored at timestamps (array([ 4,  9, 34, 37, 38]),)
+  stored_masks = jnp.array([ 262144, 8913920,  131072,  163840,  196608]) 
+  stored_rewards = jnp.array([0, 1, 0, 0, 0]) 
 
   # JIT compile the function (first run will be slower)
   jit_bitwise_and(large_vector, stored_masks, stored_rewards)

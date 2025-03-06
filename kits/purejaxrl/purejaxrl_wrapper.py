@@ -720,10 +720,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                         two_to_power_of_25 = 2**log_max_stored_mask 
                     else:
                         two_to_power_of_25 = 2**25 
-                    
+
                     every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
 
                     solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics_updated[relic_number, :], stored_rewards_updated[relic_number, :])
+
                     solved_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[relic_number], 
                                                                                             self.fixed_env_params.map_width)
                     known_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[relic_number], 
@@ -746,7 +747,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                 # If a later relic gets spawned, it never removes a previous relic
                 accumulated_solved_energy_points_grid_mask_on_known_spots = accumulated_solved_energy_points_grid_mask & accumulated_known_energy_points_grid_mask
                 accumulated_solved_energy_points_grid_mask = accumulated_solved_energy_points_grid_mask_on_known_spots | (accumulated_solved_energy_points_grid_mask & (solved_energy_points_grid_mask[relic_number] | inverse_mask_around_relic_symmetrical.astype(jnp.bool)))
-                accumulated_known_energy_points_grid_mask = (accumulated_known_energy_points_grid_mask) + (known_energy_points_grid_mask[relic_number])
+                accumulated_known_energy_points_grid_mask = (accumulated_known_energy_points_grid_mask) + (known_energy_points_grid_mask[relic_number] & solved_energy_points_grid_mask[relic_number])
                 
             accumulated_known_energy_points_grid_mask = jnp.clip(accumulated_known_energy_points_grid_mask, max=1) # in case energy points were double counted
 
@@ -823,7 +824,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             value_of_sapping_grid=value_of_sapping_grid,
             action_mask=action_mask,
             param_list=param_list,
-            solved_energy_points_grid_mask=(~accumulated_solved_energy_points_grid_mask).astype(jnp.float32),
+            solved_energy_points_grid_mask=(1 - accumulated_solved_energy_points_grid_mask).astype(jnp.float32),
             known_energy_points_grid_mask=accumulated_known_energy_points_grid_mask.astype(jnp.float32),
         )
         
