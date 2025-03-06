@@ -4,7 +4,7 @@ from typing import Annotated
 import jax
 
 # Update the default device to the CPU
-#jax.config.update("jax_default_device", jax.devices("cpu")[0])
+jax.config.update("jax_default_device", jax.devices("cpu")[0])
 
 
 import jax.numpy as jnp
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     all_action = file["actions"]
     params = file["params"]
 
-    for step in range(271, 505):
+    for step in range(390, 505):
         original_obs = all_original_obs[step]
         state = all_state[step]
         prev_state = all_state[step - 1]

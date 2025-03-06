@@ -69,8 +69,9 @@ class WrappedEnvObs:
     normalized_unit_energys_max_grid: chex.Array
     normalized_unit_energys_max_grid_opp: chex.Array
     unit_positions: chex.Array
+    normalized_unit_positions: chex.Array
+    normalized_unit_energys: chex.Array
     unit_mask: chex.Array
-    normalized_steps: float
     grid_probability_of_being_energy_point_based_on_relic_positions: chex.Array
     grid_probability_of_being_an_energy_point_based_on_no_reward: chex.Array
     grid_max_probability_of_being_an_energy_point_based_on_positive_rewards: chex.Array
@@ -97,8 +98,9 @@ def init_empty_obs(env_params, num_envs):
         tile_type=fill_zeroes((env_params.map_width, env_params.map_height)),
         normalized_energy_field=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         unit_positions=fill_zeroes((env_params.max_units, 2)),
+        normalized_unit_energys=fill_zeroes((env_params.max_units,), dtype=jnp.float32),
+        normalized_unit_positions=fill_zeroes((env_params.max_units, 2), dtype=jnp.float32),
         unit_mask=fill_zeroes((env_params.max_units,)),
-        normalized_steps=fill_zeroes((), dtype=jnp.float32),
         grid_probability_of_being_energy_point_based_on_relic_positions=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_probability_of_being_an_energy_point_based_on_no_reward=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
@@ -108,7 +110,7 @@ def init_empty_obs(env_params, num_envs):
         sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
-        param_list=fill_zeroes((6,), dtype=jnp.float32),
+        param_list=fill_zeroes((8,), dtype=jnp.float32),
         known_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         solved_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
     )
@@ -437,6 +439,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # state.py:348 shows spawn schedule.  2 spawn 0.50 with 100%, 2 spawn 100-150 with 66%, 2 spawn 200-250 with 33%
         max_steps_in_episode = self.fixed_env_params.max_steps_in_match * self.fixed_env_params.match_count_per_episode
         normalized_steps =  obs.steps / float(max_steps_in_episode + self.fixed_env_params.match_count_per_episode)
+        normalized_match_steps =  obs.match_steps / float(max_steps_in_episode + 1)
+
         spawn_steps = obs.steps // (self.fixed_env_params.max_steps_in_match // 2)
         max_relics = jnp.min(jnp.array([(1 + (obs.steps // self.fixed_env_params.max_steps_in_match)) * 2, self.fixed_env_params.max_relic_nodes]))
         num_relics_undiscovered = max_relics - num_relics_discovered
@@ -517,7 +521,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         unit_mask = jnp.array(obs.units_mask[team_id]) # shape (max_units, )
         unit_positions = jnp.array(obs.units.position[team_id]) # shape (max_units, 2)
+        normalized_unit_positions = unit_positions / float(self.fixed_env_params.map_width)
         unit_energys = jnp.array(obs.units.energy[team_id]) # shape (max_units, 1)
+        normalized_unit_energys = unit_energys / float(self.fixed_env_params.max_unit_energy)
         unit_energys_max_grid = self.compute_energy_map_max(unit_positions, unit_mask, unit_energys) 
         normalized_unit_energys_max_grid = unit_energys_max_grid.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
@@ -538,15 +544,17 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_dot_product = jnp.full(2, -1, dtype=jnp.int16)
         diff_dot_product = diff_dot_product.at[team_id].set(1)
  
-        difference_points_normalized = jnp.dot(obs.team_points, diff_dot_product) / (self.fixed_env_params.max_units * self.fixed_env_params.max_steps_in_match / 2)
+        difference_points_normalized = jnp.dot(obs.team_points, diff_dot_product) / (self.fixed_env_params.max_units * self.fixed_env_params.max_steps_in_match / 8)
         difference_wins_normalized = jnp.dot(obs.team_wins, diff_dot_product) / self.fixed_env_params.match_count_per_episode
         
     
         normalized_unit_energys_max_grid_opp = unit_energys_max_grid_opp.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
 
+        # energys can be negative, but unknown is coded as -1.  Make them even more negative to help differentiate and avoid confusion
         energy_field_with_extra_mask = obs.map_features.energy - (sensor_mask_inverse * self.fixed_env_params.max_energy_per_tile)
-        symmetrical_energy_field = jnp.maximum(energy_field_with_extra_mask, energy_field_with_extra_mask[::-1, ::-1].T) 
-        normalized_energy_field = symmetrical_energy_field.astype(jnp.float32) / self.fixed_env_params.max_energy_per_tile
+        #symmetrical_energy_field = jnp.maximum(energy_field_with_extra_mask, energy_field_with_extra_mask[::-1, ::-1].T) 
+        #we don't pass in a symmetric sensor mask, so it could be confusing.  I dont see how we'd use the symmetry though so whatever
+        normalized_energy_field = energy_field_with_extra_mask.astype(jnp.float32) / self.fixed_env_params.max_energy_per_tile
 
         tile_type = jnp.array(obs.map_features.tile_type)
         symmetrical_tile_type = jnp.maximum(tile_type, tile_type[::-1, ::-1].T)
@@ -672,7 +680,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
 
         for relic_number in range(half_max_num_relics):
-            mask_around_relic = create_centered_mask(discovered_relic_node_positions[relic_number], n=self.fixed_env_params.map_width, dtype=jnp.bool)
+            mask_around_relic = create_centered_mask(discovered_relic_node_positions[relic_number], n=self.fixed_env_params.map_width, dtype=jnp.bool) & discovered_relic_nodes_mask[relic_number] 
             unsolved_spots = (~solved_energy_points_grid_mask[relic_number]) & mask_around_relic
             solved_spots = solved_energy_points_grid_mask[relic_number] & mask_around_relic
 
@@ -750,13 +758,14 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_positions_opp_predicted = unit_positions_opp + unit_positions_opp_diff_last_round
        
        # TODO: account for units moving towards EP?
+       # TODO: remove extra kill parameter, let it learn ...
         unit_positions_opp_predicted = jnp.clip(unit_positions_opp_predicted, min=0, max=self.fixed_env_params.map_width)
-        number_units_killed_direct_hit = (unit_energys_opp < params.unit_sap_cost) & unit_mask_opp
-        number_units_killed_direct_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_direct_hit)
+        # number_units_killed_direct_hit = (unit_energys_opp < params.unit_sap_cost) & unit_mask_opp
+        # number_units_killed_direct_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_direct_hit)
 
-        number_units_killed_adjacent_hit = (unit_energys_opp < (params.unit_sap_cost * params.unit_sap_dropoff_factor)) & unit_mask_opp
-        number_units_killed_adjacent_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_adjacent_hit)
-        number_units_killed_adjacent_hit_summed_grid = self.convolution_for_sap_actions_3x3(number_units_killed_adjacent_hit_grid.astype(jnp.float32), 1, 0, jnp.float32) #conv on nvidia must be float32?
+        # number_units_killed_adjacent_hit = (unit_energys_opp < (params.unit_sap_cost * params.unit_sap_dropoff_factor)) & unit_mask_opp
+        # number_units_killed_adjacent_hit_grid = self.compute_counts_map(unit_positions_opp_predicted, number_units_killed_adjacent_hit)
+        # number_units_killed_adjacent_hit_summed_grid = self.convolution_for_sap_actions_3x3(number_units_killed_adjacent_hit_grid.astype(jnp.float32), 1, 0, jnp.float32) #conv on nvidia must be float32?
 
         potential_energy_taken_opp = jnp.clip(unit_energys_opp, max=params.unit_sap_cost, min=0)
         unit_energy_potentially_taken_grid_opp = self.compute_energy_map_sum(unit_positions_opp_predicted, unit_mask_opp, potential_energy_taken_opp)
@@ -765,7 +774,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         # effectively killing a unit is 1 value, and reducing points is 1/params.unit_sap_cost value per point
         # todo: normalize
-        value_of_sapping_grid = number_units_killed_adjacent_hit_summed_grid + number_units_killed_direct_hit_grid +  unit_energy_potentially_taken_sum_grid_opp_normalized / 9.
+        value_of_sapping_grid = (unit_energy_potentially_taken_sum_grid_opp_normalized) / 9.
 
         candidate_sap_locations_x, candidate_sap_locations_y, valid_saps = debuggable_vmap(self.find_max_index_subsection_for_sap_ranges, in_axes=(None, 0, None), out_axes=0)(
             value_of_sapping_grid, unit_positions, params.unit_sap_range
@@ -786,6 +795,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             params.unit_sap_range / float(env_params_ranges["unit_sap_range"][-1]),
             difference_points_normalized,
             difference_wins_normalized,
+            normalized_steps,
+            normalized_match_steps
         ])
 
         # add sensor last visit?
@@ -798,10 +809,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             tile_type=symmetrical_tile_type,
             normalized_energy_field=normalized_energy_field,
             unit_positions=unit_positions,
+            normalized_unit_positions=normalized_unit_positions,
+            normalized_unit_energys=normalized_unit_energys,
             unit_mask=unit_mask,
             sensor_mask=sensor_mask.astype(jnp.float32),
             sensor_last_visit_normalized=sensor_last_visit_normalized,
-            normalized_steps=normalized_steps,
             grid_probability_of_being_energy_point_based_on_relic_positions=grid_probability_of_being_energy_point_based_on_relic_positions,
             grid_max_probability_of_being_an_energy_point_based_on_positive_rewards=grid_max_probability_of_being_an_energy_point_based_on_positive_rewards,
             grid_min_probability_of_being_an_energy_point_based_on_positive_rewards=grid_min_probability_of_being_an_energy_point_based_on_positive_rewards,
@@ -948,7 +960,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             return 1. - (jnp.minimum(update_count, stopping_point) / stopping_point)
 
         
-        match_win_summed = match_win_summed * 0
+        match_win_summed = match_win_summed * 20
         diff_wins_summed = diff_wins_summed * 0 #* (progress_shape_rate(0.8))
         diff_points_summed = diff_points_summed * 1# * (progress_shape_rate(0.9))
         number_relics_summed = number_relics_discovered * 10 * (progress_shape_rate(1))
@@ -957,7 +969,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         occupied_same_space_summed = occupied_same_space * -0.4 * (progress_shape_rate(0.5))
         number_times_visited_unknown_spot_summed = number_times_visited_unknown_spot * (progress_shape_rate(0.7))
         
-        reward = match_win_summed + diff_wins_summed + diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed + number_relics_summed + number_times_visited_unknown_spot_summed
+        reward = diff_points_summed + diff_wins_summed# + diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed + number_relics_summed + number_times_visited_unknown_spot_summed
 
 
         return reward

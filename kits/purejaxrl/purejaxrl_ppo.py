@@ -79,19 +79,17 @@ class EmbeddingEncoder(nn.Module):
         tile_type_embeddings =  tile_type_embeder(obs.tile_type)
     
         map_shape = tile_type_embeddings.shape[-3:-1]
-        normalized_steps_reshaped = jnp.array(obs.normalized_steps)
-        normalized_steps_reshaped =  jnp.reshape(normalized_steps_reshaped, normalized_steps_reshaped.shape + (1,1,1)) # (Env) -> # (Env, 1,1,1)
-        normalized_steps_reshaped = jnp.tile(normalized_steps_reshaped, reps=(1,) + map_shape + (1,))  # (Env, w,h,1)
 
         param_list_reshaped = jnp.array(obs.param_list)
         param_list_reshaped =  jnp.reshape(param_list_reshaped, (param_list_reshaped.shape[0],) + (1,1) + (param_list_reshaped.shape[1],)) # (Env, 11) -> # (Env, 1,1,11)
         param_list_reshaped = jnp.tile(param_list_reshaped, reps=(1,) + map_shape + (1,))  # (Env, w,h,11)
 
-
+        # no relic map
+        # maybe add symmetric sensor?
+        # sensor_last_visited has no mask?
         grid_embedding = jnp.concatenate(
             [
                 tile_type_embeddings,
-                normalized_steps_reshaped,
                 param_list_reshaped,
                 obs.sensor_mask[..., jnp.newaxis],
                 obs.normalized_unit_counts[..., jnp.newaxis],
@@ -100,6 +98,7 @@ class EmbeddingEncoder(nn.Module):
                 obs.normalized_unit_energys_max_grid_opp[..., jnp.newaxis],
                 obs.grid_probability_of_being_an_energy_point_based_on_no_reward[..., jnp.newaxis],
                 obs.grid_max_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
+                obs.normalized_energy_field[..., jnp.newaxis],
                 #obs.grid_min_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.sensor_last_visit_normalized[..., jnp.newaxis],
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
@@ -184,6 +183,8 @@ class ActorCritic(nn.Module):
             local_agent_features = jnp.concatenate(
                 [
                     x.unit_mask[..., jnp.newaxis],
+                    x.normalized_unit_energys[..., jnp.newaxis],
+                    x.normalized_unit_positions,
                     local_agent_embeddings,
                     local_agent_convoluted_features,
                     global_context
@@ -326,7 +327,7 @@ def make_train(config, writer):
                 reset_every = 5
             else:    
                 raise
-            
+
             obsv, env_state = jax.lax.cond(update_count % reset_every == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
 
             # COLLECT TRAJECTORIES
