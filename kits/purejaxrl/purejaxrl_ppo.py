@@ -105,8 +105,8 @@ class EmbeddingEncoder(nn.Module):
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis],
                 obs.value_of_sapping_grid[..., jnp.newaxis],
-                obs.solved_energy_points_grid_mask[..., jnp.newaxis],
-                obs.known_energy_points_grid_mask[..., jnp.newaxis],
+                #obs.solved_energy_points_grid_mask[..., jnp.newaxis],
+                #obs.known_energy_points_grid_mask[..., jnp.newaxis],
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
@@ -347,7 +347,12 @@ def make_train(config, writer):
 
                 # Using fake_vmap with 1 env so that we can short circuit the solver
                 # vmap messes with jax.lax.cond
-                obsv, env_state, (reward_0, reward_1), done, info = fake_vmap(
+                if config["NUM_ENVS"] > 1:
+                    step_vmap_option = debuggable_vmap
+                else:
+                    step_vmap_option = fake_vmap
+
+                obsv, env_state, (reward_0, reward_1), done, info = step_vmap_option(
                     env.step, in_axes=(0, 0, 0, 0, None)
                 )(rng_step, env_state, action, env_params_randomized, update_count)
 

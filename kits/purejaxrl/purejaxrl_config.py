@@ -1,9 +1,9 @@
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 1,
+    "NUM_ENVS": 4,
     "NUM_STEPS": 505, # MUST STAY 101!!!
-    "TOTAL_TIMESTEPS": 1_000_000,
+    "TOTAL_TIMESTEPS": 200_000,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 1, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.995,
@@ -16,5 +16,5 @@ config = {
     "ANNEAL_LR": True,
     "DEBUG": True,
     "PROFILE": False,
-    "CONVOLUTIONS": False,
+    "CONVOLUTIONS": True,
 }
