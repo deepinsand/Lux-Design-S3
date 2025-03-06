@@ -151,9 +151,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     def __init__(self, env: environment.Environment, total_updates=None):
         super().__init__(env)
         self.total_updates = total_updates
-        #two_to_power_of_25 = 2**25
-        #self.every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
-
+      
     def observation_space(self, params: EnvParams) -> spaces.Box:
         return None # this is deeply coupled into train later
     
@@ -185,7 +183,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             symmetrical_tile_type_last_round=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
             drift_speed_guess=jnp.zeros((), dtype=jnp.float32),
-            known_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.bool),
+            known_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.int32),
             solved_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.bool),
             stored_unit_masks_around_relics=jnp.zeros(50, dtype=jnp.int32),
             stored_rewards=jnp.zeros(50, dtype=jnp.int32),
@@ -661,29 +659,40 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
        
 
         # SOLVER!!!!
+        mask_around_relic = create_centered_mask(discovered_relic_node_positions[0], n=self.fixed_env_params.map_width, dtype=jnp.bool)
+        unsolved_spots = (~state.solved_energy_points_grid_mask) & mask_around_relic
+        number_units_on_unsolved_spot = (grid_unit_mask * unsolved_spots.astype(jnp.int16)).sum()
 
-        # TODO: if a unit is definitely on an ep, we can still solve and subtract
-        #   
-        two_to_power_of_25 = 2**25
-        every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
-
-        mask_around_relic = create_centered_mask(discovered_relic_node_positions[0], n=self.fixed_env_params.map_width)
-        inverse_mask_around_relic = 1 - mask_around_relic
+        inverse_mask_around_relic = 1 - mask_around_relic.astype(jnp.int32)
         units_not_around_relic = inverse_mask_around_relic * grid_unit_mask
         probabilty_units_not_around_relic_are_on_ep = grid_probability_of_being_energy_point_based_on_relic_positions * units_not_around_relic
         positions_as_32_bit = extract_32bit_from_grid_mask(grid_unit_mask, discovered_relic_node_positions[0])
         valid_to_store = discovered_relic_nodes_mask[0] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over)
         valid_to_store = valid_to_store.astype(jnp.int32)
+    
+        def solver():
+            # TODO: if a unit is definitely on an ep, we can still solve and subtract
+            #   
+            two_to_power_of_25 = 2**25
+            every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
 
-        stored_unit_masks_around_relics = state.stored_unit_masks_around_relics.at[obs.steps % 50].set(positions_as_32_bit * valid_to_store)
-        stored_rewards = state.stored_rewards.at[obs.steps % 50].set(accumulated_points_last_round * valid_to_store)
-        solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics, stored_rewards)
-        solved_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[0], 
-                                                                                  self.fixed_env_params.map_width)
-        known_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[0], 
-                                                                                  self.fixed_env_params.map_width)
-        solved_energy_points_grid_mask = solved_energy_points_grid_mask | state.solved_energy_points_grid_mask
-        known_energy_points_grid_mask = known_energy_points_grid_mask | state.known_energy_points_grid_mask
+            stored_unit_masks_around_relics = state.stored_unit_masks_around_relics.at[obs.steps % 50].set(positions_as_32_bit * valid_to_store)
+            stored_rewards = state.stored_rewards.at[obs.steps % 50].set(accumulated_points_last_round * valid_to_store)
+
+            solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics, stored_rewards)
+            solved_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[0], 
+                                                                                    self.fixed_env_params.map_width)
+            known_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[0], 
+                                                                                    self.fixed_env_params.map_width)
+            solved_energy_points_grid_mask = solved_energy_points_grid_mask | state.solved_energy_points_grid_mask
+            known_energy_points_grid_mask = known_energy_points_grid_mask | state.known_energy_points_grid_mask
+            return (stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask)
+
+        stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask = jax.lax.cond(
+            (number_units_on_unsolved_spot > 0) & valid_to_store,
+            solver,
+            lambda: (state.stored_unit_masks_around_relics, state.stored_rewards, state.solved_energy_points_grid_mask, state.known_energy_points_grid_mask)
+        )
 
         # TODO: account for units getting killed, check energy?
 

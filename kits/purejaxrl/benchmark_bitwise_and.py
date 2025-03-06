@@ -18,7 +18,7 @@ def mask_to_32_bit_integer(mask):
     return jnp.sum(weighted_bits).astype(jnp.int32) # Explicitly cast to int32 for clarity
 
 
-def create_centered_mask(pos, mask_size=5, n=24):
+def create_centered_mask(pos, mask_size=5, n=24, dtype=jnp.int32):
   half_mask = mask_size // 2
   center_x, center_y = pos
   rows = jnp.arange(n)
@@ -35,7 +35,7 @@ def create_centered_mask(pos, mask_size=5, n=24):
   mask = (row_grid >= row_start) & (row_grid < row_end) & \
          (col_grid >= col_start) & (col_grid < col_end)
 
-  return mask.astype(jnp.int32) # Convert boolean mask to integer (0 and 1)
+  return mask.astype(dtype) # Convert boolean mask to integer (0 and 1)
 
 
 def extract_32bit_from_grid_mask(grid, pos, subsection_size=5):

@@ -11,7 +11,7 @@ from flax.training.train_state import TrainState
 import distrax
 import gymnax
 import math
-from jax_debug import debuggable_vmap, debuggable_conditional_breakpoint
+from jax_debug import debuggable_vmap, fake_vmap
 import functools
 from luxai_s3.params import EnvParams, env_params_ranges
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs, NormalizeVecReward, LogWrapper, init_empty_obs
@@ -320,7 +320,7 @@ def make_train(config, writer):
             reset_obsv, reset_env_state = debuggable_vmap(env.reset, in_axes=(0, 0, 0))(reset_rng, env_params_randomized, old_env_state) # pass in old_env_state for log and normalize state
 
             # the num_steps should be 101, so we hardcode 5 matches here.  shorter trajectories should mean faster training
-            obsv, env_state = jax.lax.cond(update_count % 5 == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
+            obsv, env_state = jax.lax.cond(update_count % 1 == 0, lambda: (reset_obsv, reset_env_state), lambda: (old_obsv, old_env_state))
 
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
@@ -344,9 +344,13 @@ def make_train(config, writer):
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-                obsv, env_state, (reward_0, reward_1), done, info = debuggable_vmap(
+
+                # Using fake_vmap with 1 env so that we can short circuit the solver
+                # vmap messes with jax.lax.cond
+                obsv, env_state, (reward_0, reward_1), done, info = fake_vmap(
                     env.step, in_axes=(0, 0, 0, 0, None)
                 )(rng_step, env_state, action, env_params_randomized, update_count)
+
 
                 transition_0 = Transition(
                     done, action_0, value_0, reward_0, log_prob_0, last_obs_0, info

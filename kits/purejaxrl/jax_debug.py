@@ -39,7 +39,67 @@ def debuggable_vmap(func, in_axes=0, out_axes=0):
     else:
         return jax.vmap(func, in_axes=in_axes, out_axes=out_axes)
 
+def fake_vmap(func, in_axes=0, out_axes=0):
+    def single_batch_vamp(*args):
+        # Handle in_axes and out_axes
+        if isinstance(in_axes, int):
+            in_axes_tuple = (in_axes,) * len(args)
+        else:
+            in_axes_tuple = in_axes
 
+        # Determine the length of the mapped dimension (batch size) - find the first non-None in_axis
+        batch_size = None
+        for arg_index, axis in enumerate(in_axes_tuple):
+            if axis is not None:
+                batch_size = args[arg_index].shape[axis]
+                break
+        if batch_size is None:
+            # If all in_axes are None, then the batch size doesn't really matter for looping,
+            # but to proceed we'll assume batch size of 1 (or take size from first arg if available)
+            batch_size = 1
+            if args:
+                batch_size = args[0].shape[0] if args[0].ndim > 0 else 1 # Fallback, might need more robust logic
+        assert(batch_size == 1), "fake_vmap cannot be used over multiple environments"
+
+        # Determine the length of the mapped dimension (batch size) - find the first non-None in_axis
+        batch_size = 1
+        # Prepare arguments for the original function for this iteration
+        single_element_args = []
+        for arg_index, arg in enumerate(args):
+            axis_to_slice = in_axes_tuple[arg_index]
+
+            if axis_to_slice is None:
+                single_element_args.append(arg)
+            else:
+                def slicing_fn(leaf): 
+                    if isinstance(leaf, jnp.ndarray):
+                        slices = [slice(None)] * leaf.ndim
+                        slices[axis_to_slice] = 0
+                        return leaf[tuple(slices)]
+                    else:
+                        return leaf
+
+                sliced_arg = tree_util.tree_map(slicing_fn, arg) # Apply slicing_fn to all leaves of 'arg'
+                single_element_args.append(sliced_arg)
+
+
+                # sliced_leaves = []
+                # flattened_arg, treedef = tree_util.tree_flatten(arg)
+
+                # for leaf_index in range(len(flattened_arg)):
+                #     slices = [slice(None)] * flattened_arg[leaf_index].ndim
+                #     slices[axis_to_slice] = i
+                #     sliced_leaves.append(flattened_arg[leaf_index][tuple(slices)])
+
+                # return tree_util.tree_unflatten(treedef, sliced_leaves)
+
+
+        # Call the original function with single elements
+        result = func(*single_element_args)
+        return maybe_wrap_results_in_stack([result], batch_size, out_axes)
+
+    return single_batch_vamp
+    
 def debuggable_scan(body_fun, init, xs=None, length=None, reverse=False, unroll=1):
     """
     Conditionally returns either jax.lax.scan or loop_based_scan_replacement
