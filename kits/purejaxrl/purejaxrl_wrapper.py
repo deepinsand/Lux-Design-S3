@@ -661,15 +661,27 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # SOLVER!!!!
         mask_around_relic = create_centered_mask(discovered_relic_node_positions[0], n=self.fixed_env_params.map_width, dtype=jnp.bool)
         unsolved_spots = (~state.solved_energy_points_grid_mask) & mask_around_relic
-        number_units_on_unsolved_spot = (grid_unit_mask * unsolved_spots.astype(jnp.int16)).sum()
+        solved_spots = state.solved_energy_points_grid_mask & mask_around_relic
 
-        inverse_mask_around_relic = 1 - mask_around_relic.astype(jnp.int32)
-        units_not_around_relic = inverse_mask_around_relic * grid_unit_mask
+        grid_units_symmetrical = grid_unit_mask + (grid_unit_mask[::-1, ::-1].T)
+        grid_units_symmetrical_mask = jnp.clip(grid_units_symmetrical, max=1)
+        number_units_on_unsolved_spots_grid = (grid_units_symmetrical * unsolved_spots.astype(jnp.int16))
+        more_than_one_unit_on_unsolved_spots = (number_units_on_unsolved_spots_grid > 1).any() # this disqualifes solving because the solver only does binary, not 2s
+        total_number_units_on_unsolved_spot = number_units_on_unsolved_spots_grid.sum()
+
+        # If there are more than one units on a solved spot, then fix the reward
+        number_units_on_solved_spots_grid = (grid_units_symmetrical * solved_spots.astype(jnp.int16))
+        number_of_solved_spots_with_multiple_units = (number_units_on_solved_spots_grid > 1).sum()
+
+        inverse_mask_around_relic_symmetrical = 1 - jnp.logical_or(mask_around_relic , mask_around_relic[::-1, ::-1].T).astype(jnp.int32)
+
+        units_not_around_relic = inverse_mask_around_relic_symmetrical * grid_unit_mask
         probabilty_units_not_around_relic_are_on_ep = grid_probability_of_being_energy_point_based_on_relic_positions * units_not_around_relic
-        positions_as_32_bit = extract_32bit_from_grid_mask(grid_unit_mask, discovered_relic_node_positions[0])
-        valid_to_store = discovered_relic_nodes_mask[0] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over)
+        valid_to_store = discovered_relic_nodes_mask[0] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over) & (~more_than_one_unit_on_unsolved_spots) & (total_number_units_on_unsolved_spot > 0)
         valid_to_store = valid_to_store.astype(jnp.int32)
-    
+
+        positions_as_32_bit = extract_32bit_from_grid_mask(grid_units_symmetrical_mask, discovered_relic_node_positions[0])
+
         def solver():
             # TODO: if a unit is definitely on an ep, we can still solve and subtract
             #   
@@ -677,19 +689,21 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
 
             stored_unit_masks_around_relics = state.stored_unit_masks_around_relics.at[obs.steps % 50].set(positions_as_32_bit * valid_to_store)
-            stored_rewards = state.stored_rewards.at[obs.steps % 50].set(accumulated_points_last_round * valid_to_store)
+            stored_rewards = state.stored_rewards.at[obs.steps % 50].set((accumulated_points_last_round - number_of_solved_spots_with_multiple_units) * valid_to_store)
 
             solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics, stored_rewards)
             solved_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[0], 
                                                                                     self.fixed_env_params.map_width)
             known_energy_points_grid_mask = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[0], 
                                                                                     self.fixed_env_params.map_width)
-            solved_energy_points_grid_mask = solved_energy_points_grid_mask | state.solved_energy_points_grid_mask
-            known_energy_points_grid_mask = known_energy_points_grid_mask | state.known_energy_points_grid_mask
+            solved_energy_points_grid_mask_symmetrical = jnp.logical_or(solved_energy_points_grid_mask , solved_energy_points_grid_mask[::-1, ::-1].T)
+            solved_energy_points_grid_mask = solved_energy_points_grid_mask_symmetrical | state.solved_energy_points_grid_mask
+            known_energy_points_grid_mask_symmetrical = known_energy_points_grid_mask | known_energy_points_grid_mask[::-1, ::-1].T
+            known_energy_points_grid_mask = known_energy_points_grid_mask_symmetrical | state.known_energy_points_grid_mask
             return (stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask)
 
         stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask = jax.lax.cond(
-            (number_units_on_unsolved_spot > 0) & valid_to_store,
+            valid_to_store,
             solver,
             lambda: (state.stored_unit_masks_around_relics, state.stored_rewards, state.solved_energy_points_grid_mask, state.known_energy_points_grid_mask)
         )
@@ -896,11 +910,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             stopping_point = float(self.total_updates) * cutoff
             return 1. - (jnp.minimum(update_count, stopping_point) / stopping_point)
         
-        match_win_summed = match_win_summed * 100
-        diff_wins_summed = diff_wins_summed * 20 * (progress_shape_rate(0.8))
-        diff_points_summed = diff_points_summed * 1 * (progress_shape_rate(0.6))
-        new_spaces_visited_summed = new_spaces_visited * 0.2 * (progress_shape_rate(0.2))
-        occupied_same_space_summed = occupied_same_space * -0.4 * (progress_shape_rate(0.2))
+        match_win_summed = match_win_summed * 0
+        diff_wins_summed = diff_wins_summed * 20 #* (progress_shape_rate(0.8))
+        diff_points_summed = diff_points_summed * 1 * (progress_shape_rate(0.9))
+        new_spaces_visited_summed = new_spaces_visited * 0.4 * (progress_shape_rate(0.5))
+        occupied_same_space_summed = occupied_same_space * -0.4 * (progress_shape_rate(0.5))
 
         reward = match_win_summed + diff_wins_summed + diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed
 
