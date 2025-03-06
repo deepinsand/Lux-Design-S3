@@ -104,6 +104,7 @@ class EmbeddingEncoder(nn.Module):
                 obs.grid_avg_probability_of_being_an_energy_point_based_on_positive_rewards[..., jnp.newaxis],
                 obs.grid_probability_of_being_energy_point_based_on_relic_positions[..., jnp.newaxis],
                 obs.value_of_sapping_grid[..., jnp.newaxis],
+                obs.relic_map[..., jnp.newaxis],
                 #obs.solved_energy_points_grid_mask[..., jnp.newaxis],
                 #obs.known_energy_points_grid_mask[..., jnp.newaxis],
             ],

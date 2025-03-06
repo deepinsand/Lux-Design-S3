@@ -90,7 +90,7 @@ def init_empty_obs(env_params, num_envs):
         return jnp.zeros((num_envs, *shape), dtype=dtype)
     
     return WrappedEnvObs(
-        relic_map=fill_zeroes((env_params.map_width, env_params.map_height)),
+        relic_map=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         normalized_unit_counts=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         normalized_unit_counts_opp=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         normalized_unit_energys_max_grid=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
@@ -110,7 +110,7 @@ def init_empty_obs(env_params, num_envs):
         sensor_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
-        param_list=fill_zeroes((8,), dtype=jnp.float32),
+        param_list=fill_zeroes((9,), dtype=jnp.float32),
         known_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         solved_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
     )
@@ -603,10 +603,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         #jax.debug.print("drifted_confirmed_with_observed: {}, step: {}, params: {}", drifted_confirmed_with_observed, obs.steps, drift_speed_guess)
 
         # this should only happen if somehow on the 8th step, there was a drift but it was unobserved.  
-        symmetrical_tile_type = jax.lax.cond(
+        symmetrical_tile_type, symmetrical_tile_type_next_round  = jax.lax.cond(
             drifted_confirmed_with_observed, 
-            lambda: symmetrical_tile_type_next_round.astype(jnp.int16),
-            lambda: symmetrical_tile_type.astype(jnp.int16)
+            lambda: (symmetrical_tile_type.astype(jnp.int16), symmetrical_tile_type_next_round.astype(jnp.int16)),
+            lambda: (symmetrical_tile_type.astype(jnp.int16), symmetrical_tile_type.astype(jnp.int16))
         )
 
         match_over = self.is_match_over(obs, state)
@@ -798,17 +798,18 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             difference_points_normalized,
             difference_wins_normalized,
             normalized_steps,
-            normalized_match_steps
+            normalized_match_steps,
+            drift_speed_guess # already normalized ...
         ])
 
         # add sensor last visit?
         new_observation = WrappedEnvObs(
-            relic_map=relic_map, # not used
+            relic_map=relic_map.astype(jnp.float32), # not used
             normalized_unit_counts=normalized_unit_counts,
             normalized_unit_counts_opp=normalized_unit_counts_opp,
             normalized_unit_energys_max_grid=normalized_unit_energys_max_grid,
             normalized_unit_energys_max_grid_opp=normalized_unit_energys_max_grid_opp,
-            tile_type=symmetrical_tile_type,
+            tile_type=symmetrical_tile_type_next_round, #have movements be forward looking
             normalized_energy_field=normalized_energy_field,
             unit_positions=unit_positions,
             normalized_unit_positions=normalized_unit_positions,
