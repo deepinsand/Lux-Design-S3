@@ -16,7 +16,7 @@ import functools
 from luxai_s3.params import EnvParams, env_params_ranges
 from purejaxrl_wrapper import LuxaiS3GymnaxWrapper, WrappedEnvObs, NormalizeVecReward, LogWrapper, init_empty_obs
 from luxai_s3.env import LuxAIS3Env
-
+import flax
 
 
 # Re-use the ResNet block and convolutional encoder from before.
@@ -240,7 +240,7 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def make_train(config, writer):
+def make_train(config, writer, transfer_learning, transfer_learning_model):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
@@ -252,7 +252,7 @@ def make_train(config, writer):
     
     fixed_env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=False, fixed_env_params=fixed_env_params)
-    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"])
+    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"], use_solver=transfer_learning)
     env = LogWrapper(env)  # Log rewards before normalizing 
     env = NormalizeVecReward(env, config["GAMMA"])
 
@@ -285,6 +285,10 @@ def make_train(config, writer):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["LR"], eps=1e-5),
             )
+
+        if transfer_learning:
+            network_params = flax.serialization.from_state_dict(network_params, {"params": transfer_learning_model['params']})
+
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,

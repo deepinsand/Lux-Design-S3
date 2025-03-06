@@ -25,6 +25,16 @@ from purejaxrl_config import config
 
 if __name__ == "__main__":
 
+    transfer_learning = config["TRANSFER_LEARNING"]
+    transfer_learning_model = "models/model_20250306-200833.pkl"
+
+    assert((not transfer_learning) or (config["NUM_ENVS"] == 1)), "NUM_ENVS should be 1 when doing transfer learning"
+
+    if transfer_learning:
+        with open(transfer_learning_model, 'rb') as f: # Binary read mode for pickle
+            transfer_learning_model = pickle.load(f) # Load parameters directly using pickle.load
+
+
     rng = jax.random.PRNGKey(42)
 
 
@@ -42,7 +52,7 @@ if __name__ == "__main__":
     if config["PROFILE"]:
         jax.profiler.start_trace(log_subdir)
     
-    train_fn = make_train(config, summary_writer)
+    train_fn = make_train(config, summary_writer, transfer_learning, transfer_learning_model)
 
     #train_fn = jax.experimental.checkify.checkify(train_fn)
 
