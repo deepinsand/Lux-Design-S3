@@ -26,7 +26,7 @@ from purejaxrl_config import config
 if __name__ == "__main__":
 
     transfer_learning = config["TRANSFER_LEARNING"]
-    transfer_learning_model = "models/model_20250306-200833.pkl"
+    transfer_learning_model = config["TRANSFER_LEARNING_BASE_MODEL"]
 
     assert((not transfer_learning) or (config["NUM_ENVS"] == 1)), "NUM_ENVS should be 1 when doing transfer learning"
 
@@ -52,7 +52,7 @@ if __name__ == "__main__":
     if config["PROFILE"]:
         jax.profiler.start_trace(log_subdir)
     
-    train_fn = make_train(config, summary_writer, transfer_learning, transfer_learning_model)
+    train_fn = make_train(config, summary_writer, transfer_learning_model)
 
     #train_fn = jax.experimental.checkify.checkify(train_fn)
 

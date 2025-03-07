@@ -241,7 +241,7 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def make_train(config, writer, transfer_learning, transfer_learning_model):
+def make_train(config, writer, transfer_learning_model):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
@@ -253,7 +253,7 @@ def make_train(config, writer, transfer_learning, transfer_learning_model):
     
     fixed_env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=False, fixed_env_params=fixed_env_params)
-    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"], use_solver=transfer_learning)
+    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"], use_solver=config["TRANSFER_LEARNING"])
     env = LogWrapper(env)  # Log rewards before normalizing 
     env = NormalizeVecReward(env, config["GAMMA"])
 
@@ -287,7 +287,7 @@ def make_train(config, writer, transfer_learning, transfer_learning_model):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
-        if transfer_learning:
+        if config["TRANSFER_LEARNING"]:
             network_params = flax.serialization.from_state_dict(network_params, {"params": transfer_learning_model['params']})
 
         train_state = TrainState.create(
