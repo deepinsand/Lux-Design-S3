@@ -913,7 +913,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         action_mask = action_mask & asteroid_mask
 
         # do nothing is always valid
-        return jnp.concatenate([jnp.full((16,1), True), action_mask], axis=1)
+        return jnp.concatenate([jnp.full((self.fixed_env_params.max_units,1), True), action_mask], axis=1)
 
 
     def is_match_over(self, obs, old_state):

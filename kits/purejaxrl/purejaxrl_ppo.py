@@ -175,38 +175,38 @@ class ActorCritic(nn.Module):
             # ---- Global Branch ----
             # Compute a global context vector using a global average pooling over the spatial dims.
 
-            num_agents = x.unit_mask.shape[-1]
-
-            global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
-            global_context = jnp.reshape(global_context, global_context.shape[:-1] + (1,) + global_context.shape[-1:]) # mb_size x 1 x features
-            global_context = jnp.tile(global_context, (num_agents, 1))
-            
             local_agent_features = jnp.concatenate(
                 [
                     x.unit_mask[..., jnp.newaxis],
                     x.normalized_unit_energys[..., jnp.newaxis],
                     x.normalized_unit_positions,
-                    local_agent_embeddings,
                     local_agent_convoluted_features,
-                    global_context
+                    local_agent_embeddings
                 ],
                 axis=-1, # Add the mask to understand if the agent is actually there
             )
 
 
+        global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
+        
+        
+        flattened_values = local_agent_features.reshape(local_agent_features.shape[:-2] + (-1,)) # flatten num_agents and features into one vector for value guess
+        flattened_values = jnp.concatenate([flattened_values, global_context], axis=-1)
+        
         actor_mean = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(local_agent_features)
+            1024, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(flattened_values)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            self.action_dim[0] * self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
         #pi = distrax.Categorical(logits=actor_mean)
 
+        actor_mean = actor_mean.reshape(actor_mean.shape[:-1] + self.action_dim)
         actor_mean_masked = jnp.where(x.action_mask, actor_mean, -1e9)
 
         pi = distrax.Independent(
@@ -214,11 +214,9 @@ class ActorCritic(nn.Module):
             reinterpreted_batch_ndims=1
         )
 
-        critic = local_agent_features.reshape(local_agent_features.shape[:-2] + (-1,)) # flatten num_agents and features into one vector for value guess
-        #critic = critic[jnp.newaxis, :] # add a leading dimenion
         critic = nn.Dense(
             512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(critic)
+        )(flattened_values)
         critic = activation(critic)
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
