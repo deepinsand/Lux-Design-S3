@@ -139,9 +139,18 @@ if __name__ == "__main__":
   # stored at timestamps array([18, 19, 20, 22, 23, 29, 31, 32]),)
   # The inclusion of the last mask causes the 5th and 25th bits to flip.  This is wrong since 
   # based on 16777240, only one of 5th and 25th can be true. 
-  stored_masks = jnp.array([     128,      256,      512,    16384,   524288,   524296, 16777240,   524304]) 
-  stored_rewards = jnp.array([1, 1, 0, 0, 1, 1, 1, 1]) 
+  #stored_masks = jnp.array([     128,      256,      512,    16384,   524288,   524296, 16777240,   524304]) 
+  #stored_rewards = jnp.array([1, 1, 0, 0, 1, 1, 1, 1]) 
 
+
+  # happened at [36, 37, 38, 39],
+  stored_rewards = jnp.array([3, 2, 2, 2]) 
+  stored_masks = jnp.array([2120, 4233, 8458, 8520])
+
+  #solved_energy_points_mask.astype(jnp.int32)
+#Array([0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=int32)
+
+#Array([1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=int32)
 
   # JIT compile the function (first run will be slower)
   jit_bitwise_and(large_vector, stored_masks, stored_rewards)

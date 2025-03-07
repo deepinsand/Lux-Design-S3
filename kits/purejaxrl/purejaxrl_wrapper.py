@@ -522,8 +522,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         unit_mask = jnp.array(obs.units_mask[team_id]) # shape (max_units, )
         unit_positions = jnp.array(obs.units.position[team_id]) # shape (max_units, 2)
-        normalized_unit_positions = unit_positions / float(self.fixed_env_params.map_width)
         unit_energys = jnp.array(obs.units.energy[team_id]) # shape (max_units, 1)
+        unit_mask = unit_mask & (unit_energys >= 0)
+
+        normalized_unit_positions = unit_positions / float(self.fixed_env_params.map_width)
         normalized_unit_energys = unit_energys / float(self.fixed_env_params.max_unit_energy)
         unit_energys_max_grid = self.compute_energy_map_max(unit_positions, unit_mask, unit_energys) 
         normalized_unit_energys_max_grid = unit_energys_max_grid.astype(jnp.float32) / self.fixed_env_params.max_unit_energy
@@ -534,12 +536,13 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         normalized_unit_counts = unit_counts / float(self.fixed_env_params.max_units)
         accumulated_points_last_round = self.extract_differece_points_for_player(obs, state, team_id)
         unit_mask_opp = jnp.array(obs.units_mask[opp_team_id]) # shape (max_units, )
-        
+        unit_energys_opp = jnp.array(obs.units.energy[opp_team_id]) # shape (max_units, 1)
+        unit_mask_opp = unit_mask_opp & (unit_energys_opp >= 0)
+
         unit_positions_opp = jnp.array(obs.units.position[opp_team_id]) # shape (max_units, 2)        
         unit_counts_opp = self.compute_counts_map(unit_positions_opp, unit_mask_opp)
         normalized_unit_counts_opp = unit_counts_opp / float(self.fixed_env_params.max_units)
         accumulated_points_last_round_opp = self.extract_differece_points_for_player(obs, state, opp_team_id)
-        unit_energys_opp = jnp.array(obs.units.energy[opp_team_id]) # shape (max_units, 1)
         unit_energys_max_grid_opp = self.compute_energy_map_max(unit_positions_opp, unit_mask_opp, unit_energys_opp)
 
         diff_dot_product = jnp.full(2, -1, dtype=jnp.int16)
@@ -713,6 +716,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                     stored_unit_masks_around_relics_updated = stored_unit_masks_around_relics.at[relic_number, obs.steps % 50].set(positions_as_32_bit * valid_to_store)
                     stored_rewards_updated = stored_rewards.at[relic_number, obs.steps % 50].set((accumulated_points_last_round - number_of_solved_spots_with_multiple_units) * valid_to_store)
 
+                    # a = stored_unit_masks_around_relics_updated[relic_number, :] > 0
+                    # jax.device_get(stored_rewards_updated[relic_number, :][a])
+
                     # For debugging, doesnt work with jit because of variable value in arange.  Use this to avoid OOM
                     if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
                         jax.debug.print("doing bad solve")
@@ -729,6 +735,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                     #jax.debug.print("solved_energy_points_mask: {}, known_energy_points_mask: {}", solved_energy_points_mask, known_energy_points_mask)
                     #jax.debug.print("known_energy_points_mask: {}", known_energy_points_mask.sum())
 
+                    known_energy_points_mask = solved_energy_points_mask.astype(jnp.int32) * known_energy_points_mask # Get rid of any errant 1's.  This helps with the or'ing we have to do to accumulate the known masks over time
+
                     solved_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[relic_number], 
                                                                                             self.fixed_env_params.map_width)
                     known_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[relic_number], 
@@ -736,17 +744,17 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                     #jax.debug.print("known_energy_points_grid_mask_for_this_relic: {}", known_energy_points_grid_mask_for_this_relic.sum())
 
                     solved_energy_points_grid_mask_for_this_relic_symmetrical = jnp.logical_or(solved_energy_points_grid_mask_for_this_relic , solved_energy_points_grid_mask_for_this_relic[::-1, ::-1].T)
-                    solved_energy_points_grid_mask_updated = solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical)
+                    solved_energy_points_grid_mask_updated = solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical | solved_energy_points_grid_mask[relic_number]) # Or it to grab all the values from solves before 50 timesteps
 
                     known_energy_points_grid_mask_for_this_relic_symmetrical = known_energy_points_grid_mask_for_this_relic | known_energy_points_grid_mask_for_this_relic[::-1, ::-1].T
-                    known_energy_points_grid_mask_updated = known_energy_points_grid_mask.at[relic_number, :, :].set(known_energy_points_grid_mask_for_this_relic_symmetrical) # shouldn't be ored! Previous answers are invalid if the mask isnt' set to true, so a true mask with a 0 answer willr esult in bad data!!!
-
+                    known_energy_points_grid_mask_updated = known_energy_points_grid_mask.at[relic_number, :, :].set(known_energy_points_grid_mask_for_this_relic_symmetrical | known_energy_points_grid_mask[relic_number]) # Or it to grab all the values from solves before 50 timesteps
+                                    
                     #jax.debug.print("known_energy_points_grid_mask_for_this_relic_symmetrical: {}", known_energy_points_grid_mask_for_this_relic_symmetrical.sum())
 
                     #jax.debug.print("known_energy_points_grid_mask_for_this_relic_symmetrical: {}", known_energy_points_grid_mask_for_this_relic_symmetrical)
 
                     #jax.debug.print("known_energy_points_grid_mask[relic_number]: {}", known_energy_points_grid_mask[relic_number])
-                                    
+                    
                     return (stored_unit_masks_around_relics_updated, stored_rewards_updated, solved_energy_points_grid_mask_updated, known_energy_points_grid_mask_updated)
 
                 stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask = jax.lax.cond(

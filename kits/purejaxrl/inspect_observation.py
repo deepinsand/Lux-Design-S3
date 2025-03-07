@@ -31,7 +31,7 @@ if __name__ == "__main__":
     all_action = file["actions"]
     params = file["params"]
 
-    for step in range(31, 32):
+    for step in range(474, 505):
         original_obs = all_original_obs[step]
         state = all_state[step]
         prev_state = all_state[step - 1]
@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
         state_solved_spots = state.solved_energy_points_grid_mask.sum()
 
-        seven_two = state.known_energy_points_grid_mask[0][7, 2]
+        seven_two = state.known_energy_points_grid_mask[1][3, 14]
         # new_obs.solved_energy_points_grid_mask.astype(jnp.int16).T
         # new_obs.known_energy_points_grid_mask.astype(jnp.int16).T
         # state.known_energy_points_grid_mask[0].astype(jnp.int16).T
