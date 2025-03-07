@@ -861,7 +861,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
 
         action_diffs = jnp.array([
-            [0, 0],  # Do nothing
+           # [0, 0],  # Do nothing
             [0, -1],  # Move up
             [1, 0],  # Move right
             [0, 1],  # Move down
@@ -869,7 +869,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         ])
 
         # Each row represents a unit, then 5 copies of the coordinates each representing an action
-        unit_3d = jnp.stack([unit_positions, unit_positions, unit_positions, unit_positions, unit_positions], axis=1) + action_diffs 
+        unit_3d = jnp.stack([unit_positions, unit_positions, unit_positions, unit_positions], axis=1) + action_diffs 
         
         off_the_map = jnp.isin(unit_3d, jnp.array([-1, self.fixed_env_params.map_height]))
         action_mask = ~off_the_map.any(axis=2)
@@ -881,10 +881,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         any_collisions = unit_4d.all(axis=3) # last dimension is of shape 2, representing x,y coordinates.  Need all to match for collision
         asteroid_mask = ~any_collisions.any(axis=2) # last dimension is of shape num_asteriods, and the action is invalid if it hits any asteroid
 
-        # TODO: MAKE IT OK TO SIT ON ASTEROID IF YOU'RE ON AN EP
         action_mask = action_mask & asteroid_mask
 
-        return action_mask
+        # do nothing is always valid
+        return jnp.concatenate([jnp.full((16,1), True), action_mask], axis=1)
 
 
     def is_match_over(self, obs, old_state):
