@@ -152,6 +152,13 @@ class ActorCritic(nn.Module):
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
                 activation,
+                nn.Conv(
+                    32,
+                    (5, 5),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
+                activation,
 
                 #ResNetBlock(features=self.features_dim, activation=self.activation),
                 #ResNetBlock(features=self.features_dim, activation=self.activation),
@@ -189,10 +196,13 @@ class ActorCritic(nn.Module):
 
         global_context = jnp.mean(convoluted_features, axis=(1,2))  # mb_size x features
         
-        
         flattened_values = local_agent_features.reshape(local_agent_features.shape[:-2] + (-1,)) # flatten num_agents and features into one vector for value guess
         flattened_values = jnp.concatenate([flattened_values, global_context], axis=-1)
         
+        actor_mean = nn.Dense(
+            1024, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(flattened_values)
+        actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
             1024, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(flattened_values)
