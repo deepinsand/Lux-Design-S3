@@ -198,8 +198,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     #@partial(jax.jit, static_argnums=(0,))
     def reset(self, key, params=None):
         obs, state = self._env.reset(key, params)
-        obs_0, stateful_data_0, _ = self.transform_obs(obs["player_0"], self.empty_stateful_env_state(), params, 0, 1, use_solver=False)
-        obs_1, stateful_data_1, _ = self.transform_obs(obs["player_1"], self.empty_stateful_env_state(), params, 1, 0, use_solver=False)
+        obs_0, stateful_data_0, _ = self.transform_obs(obs["player_0"], self.empty_stateful_env_state(), params, 0, 1, 0, use_solver=False)
+        obs_1, stateful_data_1, _ = self.transform_obs(obs["player_1"], self.empty_stateful_env_state(), params, 1, 0, 0, use_solver=False)
         return (obs_0, obs_1), WrappedEnvState(original_state=state, stateful_data_0=stateful_data_0, stateful_data_1=stateful_data_1)
     
     
@@ -239,8 +239,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             prev_stateful_data_0 = wrapped_state.stateful_data_0
             prev_stateful_data_1 = wrapped_state.stateful_data_1
 
-        new_obs_0, stateful_data_0, reward_info_0 = self.transform_obs(obs["player_0"], prev_stateful_data_0, params, 0, 1, self.use_solver)
-        new_obs_1, stateful_data_1, reward_info_1 = self.transform_obs(obs["player_1"], prev_stateful_data_1, params, 1, 0, self.use_solver)
+        new_obs_0, stateful_data_0, reward_info_0 = self.transform_obs(obs["player_0"], prev_stateful_data_0, params, 0, 1, update_count=update_count, use_solver=self.use_solver)
+        new_obs_1, stateful_data_1, reward_info_1 = self.transform_obs(obs["player_1"], prev_stateful_data_1, params, 1, 0, update_count=update_count, use_solver=self.use_solver)
 
         info["real_reward"] = self.extract_differece_points_for_player(stateful_data_0, prev_stateful_data_0, 0)
 
@@ -415,8 +415,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         )
         return drifted_map
     
-    @partial(jax.jit, static_argnums=(0,6))
-    def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params, team_id, opp_team_id, use_solver=False):
+    @partial(jax.jit, static_argnums=(0,7))
+    def transform_obs(self, obs: EnvObs, state: StatefulEnvState, params, team_id, opp_team_id, update_count, use_solver=False):
         observed_relic_node_positions = jnp.array(obs.relic_nodes) # shape (max_relic_nodes, 2)
         observed_relic_nodes_mask = jnp.array(obs.relic_nodes_mask) # shape (max_relic_nodes, )
         
@@ -823,6 +823,14 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             drift_speed_guess # already normalized ...
         ])
 
+
+        def anneal(full_strength):
+            stopping_point = jnp.ceil(float(self.total_updates) * full_strength)
+            return jnp.minimum(update_count, stopping_point) / stopping_point.astype(jnp.float32)
+
+        annealed_solved_energy_points_grid_mask = (1 - accumulated_solved_energy_points_grid_mask).astype(jnp.float32) * anneal(0.2)
+        annealed_known_energy_points_grid_mask = accumulated_known_energy_points_grid_mask.astype(jnp.float32) * anneal(0.2)
+
         # add sensor last visit?
         new_observation = WrappedEnvObs(
             relic_map=relic_map.astype(jnp.float32), # not used
@@ -846,8 +854,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             value_of_sapping_grid=value_of_sapping_grid,
             action_mask=action_mask,
             param_list=param_list,
-            solved_energy_points_grid_mask=(1 - accumulated_solved_energy_points_grid_mask).astype(jnp.float32),
-            known_energy_points_grid_mask=accumulated_known_energy_points_grid_mask.astype(jnp.float32),
+            solved_energy_points_grid_mask=annealed_solved_energy_points_grid_mask,
+            known_energy_points_grid_mask=annealed_known_energy_points_grid_mask,
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,

@@ -43,7 +43,7 @@ class Agent():
         env_cfg = EnvParams(**env_cfg_dict)
         self.env_cfg = env_cfg
         underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=env_cfg)
-        self.env = LuxaiS3GymnaxWrapper(underlying_env)
+        self.env = LuxaiS3GymnaxWrapper(underlying_env, total_updates=1)
         self.player = player
         self.opp_player = "player_1" if self.player == "player_0" else "player_0"
         self.team_id = 0 if self.player == "player_0" else 1
@@ -85,7 +85,7 @@ class Agent():
 
         def to_jit(env_state, env_obs, rng_act, should_use_solver):
             new_obs, env_state, _ = self.env.transform_obs(env_obs, env_state, self.env_cfg, self.team_id, 
-                                                        self.opp_team_id, use_solver=should_use_solver)
+                                                        self.opp_team_id, update_count=1, use_solver=should_use_solver)
 
             new_obs_with_new_axis = jax.tree_util.tree_map(lambda x: jnp.array(x)[None, ...], new_obs)
 

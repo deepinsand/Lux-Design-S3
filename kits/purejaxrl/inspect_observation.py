@@ -19,7 +19,7 @@ if __name__ == "__main__":
     jnp.set_printoptions(linewidth=500, suppress=True, precision=4)
     
     underlying_env = LuxAIS3Env(auto_reset=False, fixed_env_params=EnvParams())
-    env = LuxaiS3GymnaxWrapper(underlying_env)
+    env = LuxaiS3GymnaxWrapper(underlying_env, total_updates=1)
     
 
     with open("logs/obs.pkl", 'rb') as f: # Binary read mode for pickle
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     all_action = file["actions"]
     params = file["params"]
 
-    for step in range(474, 505):
+    for step in range(236, 505):
         original_obs = all_original_obs[step]
         state = all_state[step]
         prev_state = all_state[step - 1]
@@ -49,4 +49,4 @@ if __name__ == "__main__":
         # state.known_energy_points_grid_mask[0].astype(jnp.int16).T
         jax.debug.print("step: {}, total_solved_spots: {}, total_knowns_spots: {}, state_solved_spots: {}, seven_two: {}", step, total_solved_spots, total_knowns_spots, state_solved_spots, seven_two)
 
-        next_obs, next_env_state, _ = env.transform_obs(original_obs, prev_state, params, 0, 1, use_solver=config["TRANSFER_LEARNING"])
+        next_obs, next_env_state, _ = env.transform_obs(original_obs, prev_state, params, 0, 1, update_count=1, use_solver=config["TRANSFER_LEARNING"])
