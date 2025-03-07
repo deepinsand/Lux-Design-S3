@@ -715,6 +715,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
                     # For debugging, doesnt work with jit because of variable value in arange.  Use this to avoid OOM
                     if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
+                        jax.debug.print("doing bad solve")
                         max_stored_mask = jnp.max(stored_unit_masks_around_relics_updated[relic_number, :])
                         log_max_stored_mask = jnp.floor(jnp.log2(max_stored_mask)) + 1 # Do floor to capture highest order bit, then add 1 at the end
                         two_to_power_of_25 = 2**log_max_stored_mask 
@@ -725,15 +726,27 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
                     solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics_updated[relic_number, :], stored_rewards_updated[relic_number, :])
 
+                    #jax.debug.print("solved_energy_points_mask: {}, known_energy_points_mask: {}", solved_energy_points_mask, known_energy_points_mask)
+                    #jax.debug.print("known_energy_points_mask: {}", known_energy_points_mask.sum())
+
                     solved_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[relic_number], 
                                                                                             self.fixed_env_params.map_width)
                     known_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[relic_number], 
                                                                                             self.fixed_env_params.map_width)
+                    #jax.debug.print("known_energy_points_grid_mask_for_this_relic: {}", known_energy_points_grid_mask_for_this_relic.sum())
+
                     solved_energy_points_grid_mask_for_this_relic_symmetrical = jnp.logical_or(solved_energy_points_grid_mask_for_this_relic , solved_energy_points_grid_mask_for_this_relic[::-1, ::-1].T)
-                    solved_energy_points_grid_mask_updated = solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical | solved_energy_points_grid_mask[relic_number])
+                    solved_energy_points_grid_mask_updated = solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical)
 
                     known_energy_points_grid_mask_for_this_relic_symmetrical = known_energy_points_grid_mask_for_this_relic | known_energy_points_grid_mask_for_this_relic[::-1, ::-1].T
-                    known_energy_points_grid_mask_updated = known_energy_points_grid_mask.at[relic_number, :, :].set(known_energy_points_grid_mask_for_this_relic_symmetrical | known_energy_points_grid_mask[relic_number])
+                    known_energy_points_grid_mask_updated = known_energy_points_grid_mask.at[relic_number, :, :].set(known_energy_points_grid_mask_for_this_relic_symmetrical) # shouldn't be ored! Previous answers are invalid if the mask isnt' set to true, so a true mask with a 0 answer willr esult in bad data!!!
+
+                    #jax.debug.print("known_energy_points_grid_mask_for_this_relic_symmetrical: {}", known_energy_points_grid_mask_for_this_relic_symmetrical.sum())
+
+                    #jax.debug.print("known_energy_points_grid_mask_for_this_relic_symmetrical: {}", known_energy_points_grid_mask_for_this_relic_symmetrical)
+
+                    #jax.debug.print("known_energy_points_grid_mask[relic_number]: {}", known_energy_points_grid_mask[relic_number])
+                                    
                     return (stored_unit_masks_around_relics_updated, stored_rewards_updated, solved_energy_points_grid_mask_updated, known_energy_points_grid_mask_updated)
 
                 stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask = jax.lax.cond(

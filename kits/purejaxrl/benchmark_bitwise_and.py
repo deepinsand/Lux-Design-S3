@@ -135,27 +135,25 @@ if __name__ == "__main__":
   #stored_rewards = jnp.array([0, 1, 1, 2])
 
 
-  # 8913920 is
-#   subsection
-# Array([[0, 0, 0, 0, 0],
-#        [0, 0, 0, 0, 0],
-#        [1, 0, 0, 0, 0],
-#        [0, 0, 0, 0, 1],
-#        [0, 0, 0, 1, 0]], dtype=int16)
-  # with 11th, 20th adn 24th bit on.
-  # 11 comes back hot, but it should be unknown, since 20 and 24 never explored
-  # stored at timestamps (array([ 4,  9, 34, 37, 38]),)
-  stored_masks = jnp.array([ 262144, 8913920,  131072,  163840,  196608]) 
-  stored_rewards = jnp.array([0, 1, 0, 0, 0]) 
+
+  # stored at timestamps array([18, 19, 20, 22, 23, 29, 31, 32]),)
+  # The inclusion of the last mask causes the 5th and 25th bits to flip.  This is wrong since 
+  # based on 16777240, only one of 5th and 25th can be true. 
+  stored_masks = jnp.array([     128,      256,      512,    16384,   524288,   524296, 16777240,   524304]) 
+  stored_rewards = jnp.array([1, 1, 0, 0, 1, 1, 1, 1]) 
+
 
   # JIT compile the function (first run will be slower)
   jit_bitwise_and(large_vector, stored_masks, stored_rewards)
 
   # Time the JIT-compiled function
   start_time = time.time()
-  result = jax.block_until_ready(jit_bitwise_and(large_vector, stored_masks, stored_rewards))
+  result_mask, result_values = jax.block_until_ready(jit_bitwise_and(large_vector, stored_masks, stored_rewards))
+
+  result = (result_mask.astype(jnp.int16) * result_values) - (1 - result_mask.astype(jnp.int16))
+
   end_time = time.time()
 
   print(f"Time taken: {end_time - start_time:.4f} seconds")
 
-  print(f"Result: {result}")
+  print(f"Result: {result},")
