@@ -144,20 +144,20 @@ class ActorCritic(nn.Module):
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
                 activation,
-                # nn.Conv(
-                #     32,
-                #     (5, 5),
-                #     padding="SAME",
-                #     kernel_init=orthogonal(math.sqrt(2)),
-                # ),
-                # activation,
-                # nn.Conv(
-                #     32,
-                #     (6, 6),
-                #     padding="SAME",
-                #     kernel_init=orthogonal(math.sqrt(2)),
-                # ),
-                # activation,
+                nn.Conv(
+                    32,
+                    (5, 5),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
+                activation,
+                nn.Conv(
+                    32,
+                    (6, 6),
+                    padding="SAME",
+                    kernel_init=orthogonal(math.sqrt(2)),
+                ),
+                activation,
                 
                 #ResNetBlock(features=self.features_dim, activation=self.activation),
                 #ResNetBlock(features=self.features_dim, activation=self.activation),
@@ -201,11 +201,11 @@ class ActorCritic(nn.Module):
 
 
         actor_mean = nn.Dense(
-            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(local_agent_features)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            16, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
         # replace with transfer learning check
