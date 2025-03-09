@@ -28,12 +28,11 @@ if __name__ == "__main__":
     transfer_learning = config["TRANSFER_LEARNING"]
     transfer_learning_model = config["TRANSFER_LEARNING_BASE_MODEL"]
 
-    assert((not transfer_learning) or (config["NUM_ENVS"] == 1)), "NUM_ENVS should be 1 when doing transfer learning"
+    #assert((not transfer_learning) or (config["NUM_ENVS"] == 1)), "NUM_ENVS should be 1 when doing transfer learning"
 
     if transfer_learning:
         with open(transfer_learning_model, 'rb') as f: # Binary read mode for pickle
             transfer_learning_model = pickle.load(f) # Load parameters directly using pickle.load
-
 
     rng = jax.random.PRNGKey(42)
 

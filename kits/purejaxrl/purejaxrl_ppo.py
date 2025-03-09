@@ -154,12 +154,12 @@ class ActorCritic(nn.Module):
                 activation,
                 nn.Conv(
                     32,
-                    (5, 5),
+                    (6, 6),
                     padding="SAME",
                     kernel_init=orthogonal(math.sqrt(2)),
                 ),
                 activation,
-
+                
                 #ResNetBlock(features=self.features_dim, activation=self.activation),
                 #ResNetBlock(features=self.features_dim, activation=self.activation),
             ]
@@ -211,12 +211,21 @@ class ActorCritic(nn.Module):
             512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(
-            self.action_dim[0] * self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
-        )(actor_mean)
-        #pi = distrax.Categorical(logits=actor_mean)
 
-        actor_mean = actor_mean.reshape(actor_mean.shape[:-1] + self.action_dim)
+
+        # replace with transfer learning check
+        if False:
+            flattened_actor_mean = actor_mean.reshape(actor_mean.shape[:-2] + (-1,)) # flatten last two dimensions, which should be num_agents x 64
+            
+            actor_mean = nn.Dense(
+                self.action_dim[0] * self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            )(flattened_actor_mean)
+            
+            actor_mean = actor_mean.reshape(actor_mean.shape[:-1] + self.action_dim)
+        else:
+            actor_mean = nn.Dense(
+                self.action_dim[1], kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            )(actor_mean)
         actor_mean_masked = jnp.where(x.action_mask, actor_mean, -1e9)
 
         pi = distrax.Independent(
@@ -296,8 +305,16 @@ def make_train(config, writer, transfer_learning_model):
             )
 
         if config["TRANSFER_LEARNING"]:
+            transfer_learning_model["params"]["Dense_2"] = network_params["params"]["Dense_2"] # init transfer model with Dense 2 inits
             network_params = flax.serialization.from_state_dict(network_params, {"params": transfer_learning_model['params']})
+            
+            partition_optimizers = {'trainable': tx, 'frozen': optax.set_to_zero()}
+            param_partitions = flax.traverse_util.path_aware_map(
+                lambda path, v: 'trainable' if 'Dense_2' in path else 'frozen', network_params)
+            
+            tx = optax.multi_transform(partition_optimizers, param_partitions)
 
+        
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,

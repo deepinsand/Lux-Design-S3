@@ -17,7 +17,7 @@ config = {
     "DEBUG": True,
     "PROFILE": False,
     "CONVOLUTIONS": True,
-    "TRANSFER_LEARNING": False,
-    "TRANSFER_LEARNING_BASE_MODEL": "models/model_20250307-001220.pkl"
+    "TRANSFER_LEARNING": True,
+    "TRANSFER_LEARNING_BASE_MODEL": "models/model_20250309-142808.pkl"
 
 }
