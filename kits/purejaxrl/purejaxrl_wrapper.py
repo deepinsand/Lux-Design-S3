@@ -83,7 +83,6 @@ class WrappedEnvObs:
     action_mask: chex.Array
     param_list: chex.Array
     solved_energy_points_grid_mask: chex.Array
-    known_energy_points_grid_mask: chex.Array
 
 def init_empty_obs(env_params, num_envs):
     def fill_zeroes(shape, dtype=jnp.int16):
@@ -111,7 +110,6 @@ def init_empty_obs(env_params, num_envs):
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
         param_list=fill_zeroes((9,), dtype=jnp.float32),
-        known_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         solved_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
     )
 @struct.dataclass
@@ -134,7 +132,8 @@ class StatefulEnvState:
     stored_unit_masks_around_relics: chex.Array
     stored_rewards: chex.Array
     solved_energy_points_grid_mask: chex.Array
-    known_energy_points_grid_mask: chex.Array
+    max_solved_certainty_params: chex.Array
+
 
 @struct.dataclass
 class RewardInfo:
@@ -188,10 +187,10 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             symmetrical_tile_type_last_round=jnp.full((self.fixed_env_params.map_width, self.fixed_env_params.map_height), -1, dtype=jnp.int16),
             candidate_sap_locations=jnp.full((self.fixed_env_params.max_units, 2), -1, dtype=jnp.int32),
             drift_speed_guess=jnp.zeros((), dtype=jnp.float32),
-            known_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.int32),
-            solved_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.bool),
-            stored_unit_masks_around_relics=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, 50), dtype=jnp.int32),
+            solved_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.int32),
+            stored_unit_masks_around_relics=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, 50, 25), dtype=jnp.int32),
             stored_rewards=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, 50), dtype=jnp.int32),
+            max_solved_certainty_params=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2), dtype=jnp.int32),
         )
         return empty_data
     
@@ -677,101 +676,93 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         stored_unit_masks_around_relics = state.stored_unit_masks_around_relics
         stored_rewards = state.stored_rewards
         solved_energy_points_grid_mask = state.solved_energy_points_grid_mask
-        known_energy_points_grid_mask = state.known_energy_points_grid_mask
+        max_solved_certainty_params = state.max_solved_certainty_params
 
-        accumulated_solved_energy_points_grid_mask = jnp.full_like(grid_unit_mask, True) # this is False where a spot is unknown.  We not it when we send to obs so we can 0 it out during pretraining
-        accumulated_known_energy_points_grid_mask = jnp.full_like(grid_unit_mask, 0)
+
+        accumulated_solved_energy_points_grid_mask = jnp.full_like(grid_unit_mask, False) # this is False where a spot is unknown.  We not it when we send to obs so we can 0 it out during pretraining
 
         if use_solver:
             for relic_number in range(half_max_num_relics):
                 mask_around_relic = create_centered_mask(discovered_relic_node_positions[relic_number], n=self.fixed_env_params.map_width, dtype=jnp.bool) & discovered_relic_nodes_mask[relic_number] 
-                unsolved_spots = (~solved_energy_points_grid_mask[relic_number]) & mask_around_relic
-                solved_spots = solved_energy_points_grid_mask[relic_number] & mask_around_relic
+                mask_around_relic2 = create_centered_mask(discovered_relic_node_positions[relic_number+3], n=self.fixed_env_params.map_width, dtype=jnp.bool) & discovered_relic_nodes_mask[relic_number+3] 
 
-                grid_units_symmetrical = grid_unit_mask + (grid_unit_mask[::-1, ::-1].T)
-                grid_units_symmetrical_mask = jnp.clip(grid_units_symmetrical, max=1)
-                number_units_on_unsolved_spots_grid = (grid_units_symmetrical * unsolved_spots.astype(jnp.int16))
-                more_than_one_unit_on_unsolved_spots = (number_units_on_unsolved_spots_grid > 1).any() # this disqualifes solving because the solver only does binary, not 2s
-                total_number_units_on_unsolved_spot = number_units_on_unsolved_spots_grid.sum()
+                mask_overlap = mask_around_relic & mask_around_relic2
+                grid_units_in_overlap = mask_overlap & grid_unit_mask
 
-                # If there are more than one units on a solved spot, then fix the reward
-                number_units_on_known_solved_spots_grid = (grid_units_symmetrical * solved_spots.astype(jnp.int16) * known_energy_points_grid_mask[relic_number])
-                number_of_solved_spots_with_multiple_units = (number_units_on_known_solved_spots_grid > 1).sum()
 
-                mask_around_relic_symmetrical = jnp.logical_or(mask_around_relic , mask_around_relic[::-1, ::-1].T).astype(jnp.int32)
-                inverse_mask_around_relic_symmetrical = 1 - mask_around_relic_symmetrical
-                units_not_around_relic = inverse_mask_around_relic_symmetrical * grid_unit_mask
+
+                # want to get the union of unit counts, but not double counting overlap
+
+                mask_around_relic_symmetrical = mask_around_relic | mask_around_relic2
+                
+                
+                grid_unit_count_for_rewards_calculation_symmetrical = grid_unit_mask + (grid_unit_mask[::-1, ::-1].T)
+                # subtract overlap
+                grid_unit_count_for_rewards_calculation_symmetrical = grid_unit_count_for_rewards_calculation_symmetrical - grid_units_in_overlap.astype(jnp.int32)
+
+                inverse_mask_around_relic = 1 - mask_around_relic_symmetrical
+                
+                units_not_around_relic = inverse_mask_around_relic * grid_unit_mask
                 # TODO: if a unit is definitely on an ep, we can still solve and subtract
 
                 probabilty_units_not_around_relic_are_on_ep = grid_probability_of_being_energy_point_based_on_relic_positions * units_not_around_relic # TODO: check other solved states!
-                valid_to_store = discovered_relic_nodes_mask[relic_number] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over) & (~more_than_one_unit_on_unsolved_spots) & (total_number_units_on_unsolved_spot > 0)
+                valid_to_store = discovered_relic_nodes_mask[relic_number] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over)
                 valid_to_store = valid_to_store.astype(jnp.int32)
 
-                positions_as_32_bit = extract_32bit_from_grid_mask(grid_units_symmetrical_mask, discovered_relic_node_positions[relic_number])
+                positions_as_32_bit = extract_32bit_from_grid_mask(grid_unit_count_for_rewards_calculation_symmetrical, discovered_relic_node_positions[relic_number])
 
                 def solver():
                     # TODO: LOOK FOR THE BIGGEST NUMBER AND LOG IT FOR THE NUMBER OF PERMS
                     # TODO: remove solved units.  Either mask them or do it later
     
-                    stored_unit_masks_around_relics_updated = stored_unit_masks_around_relics.at[relic_number, obs.steps % 50].set(positions_as_32_bit * valid_to_store)
-                    stored_rewards_updated = stored_rewards.at[relic_number, obs.steps % 50].set((accumulated_points_last_round - number_of_solved_spots_with_multiple_units) * valid_to_store)
+                    stored_unit_masks_around_relics_updated = stored_unit_masks_around_relics.at[relic_number, obs.steps % 50, :].set(positions_as_32_bit * valid_to_store)
+                    stored_rewards_updated = stored_rewards.at[relic_number, obs.steps % 50].set((accumulated_points_last_round) * valid_to_store)
+
+                    # count number of items stored
+                    number_of_stored_unit_masks = (stored_unit_masks_around_relics_updated[relic_number, :, :].sum(axis=1) > 0).sum()
+                    unique_positions_occupied = (stored_unit_masks_around_relics_updated[relic_number, :, :].sum(axis=0) > 0).sum()
 
                     # a = stored_unit_masks_around_relics_updated[relic_number, :] > 0
                     # jax.device_get(stored_rewards_updated[relic_number, :][a])
 
-                    # For debugging, doesnt work with jit because of variable value in arange.  Use this to avoid OOM
-                    if os.environ.get("JAX_DISABLE_JIT", "").lower() == "true":
-                        jax.debug.print("doing bad solve")
-                        max_stored_mask = jnp.max(stored_unit_masks_around_relics_updated[relic_number, :])
-                        log_max_stored_mask = jnp.floor(jnp.log2(max_stored_mask)) + 1 # Do floor to capture highest order bit, then add 1 at the end
-                        two_to_power_of_25 = 2**log_max_stored_mask 
-                    else:
-                        two_to_power_of_25 = 2**25 
 
-                    every_permutation_of_25_bits = jnp.arange(two_to_power_of_25, dtype=jnp.int32)
-
-                    solved_energy_points_mask, known_energy_points_mask = get_certain_positions(every_permutation_of_25_bits, stored_unit_masks_around_relics_updated[relic_number, :], stored_rewards_updated[relic_number, :])
-
-                    #jax.debug.print("solved_energy_points_mask: {}, known_energy_points_mask: {}", solved_energy_points_mask, known_energy_points_mask)
-                    #jax.debug.print("known_energy_points_mask: {}", known_energy_points_mask.sum())
-
-                    known_energy_points_mask = solved_energy_points_mask.astype(jnp.int32) * known_energy_points_mask # Get rid of any errant 1's.  This helps with the or'ing we have to do to accumulate the known masks over time
-
-                    solved_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(solved_energy_points_mask, discovered_relic_node_positions[relic_number], 
-                                                                                            self.fixed_env_params.map_width)
-                    known_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(known_energy_points_mask, discovered_relic_node_positions[relic_number], 
-                                                                                            self.fixed_env_params.map_width)
-                    #jax.debug.print("known_energy_points_grid_mask_for_this_relic: {}", known_energy_points_grid_mask_for_this_relic.sum())
-
-                    solved_energy_points_grid_mask_for_this_relic_symmetrical = jnp.logical_or(solved_energy_points_grid_mask_for_this_relic , solved_energy_points_grid_mask_for_this_relic[::-1, ::-1].T)
-                    solved_energy_points_grid_mask_updated = solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical | solved_energy_points_grid_mask[relic_number]) # Or it to grab all the values from solves before 50 timesteps
-
-                    known_energy_points_grid_mask_for_this_relic_symmetrical = known_energy_points_grid_mask_for_this_relic | known_energy_points_grid_mask_for_this_relic[::-1, ::-1].T
-                    known_energy_points_grid_mask_updated = known_energy_points_grid_mask.at[relic_number, :, :].set(known_energy_points_grid_mask_for_this_relic_symmetrical | known_energy_points_grid_mask[relic_number]) # Or it to grab all the values from solves before 50 timesteps
-                                    
-                    #jax.debug.print("known_energy_points_grid_mask_for_this_relic_symmetrical: {}", known_energy_points_grid_mask_for_this_relic_symmetrical.sum())
-
-                    #jax.debug.print("known_energy_points_grid_mask_for_this_relic_symmetrical: {}", known_energy_points_grid_mask_for_this_relic_symmetrical)
-
-                    #jax.debug.print("known_energy_points_grid_mask[relic_number]: {}", known_energy_points_grid_mask[relic_number])
+                    solution, _, _, _ = jnp.linalg.lstsq(stored_unit_masks_around_relics_updated[relic_number, :, :], stored_rewards_updated[relic_number, :])
                     
-                    return (stored_unit_masks_around_relics_updated, stored_rewards_updated, solved_energy_points_grid_mask_updated, known_energy_points_grid_mask_updated)
+                    # check if 
 
-                stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask = jax.lax.cond(
+                    solved_certainty_params = number_of_stored_unit_masks * unique_positions_occupied * valid_to_store
+
+                    solved_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(solution, discovered_relic_node_positions[relic_number], 
+                                                                                            self.fixed_env_params.map_width)
+                    
+                    solved_energy_points_grid_mask_for_this_relic = (solved_energy_points_grid_mask_for_this_relic > 0.99) & (solved_energy_points_grid_mask_for_this_relic < 1.01)
+                    
+                    # TODO, check if this solution is valid by seeing if anything is over 1, if there is enough values passed in, if enough unique bit positions are covered ...
+                    solved_energy_points_grid_mask_for_this_relic_symmetrical = jnp.logical_or(solved_energy_points_grid_mask_for_this_relic , solved_energy_points_grid_mask_for_this_relic[::-1, ::-1].T)
+                    
+                    
+                    solved_energy_points_grid_mask_updated, max_solved_certainty_params_updated = jax.lax.cond(
+                        solved_certainty_params > max_solved_certainty_params[relic_number],
+                        lambda: (solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical), 
+                                 max_solved_certainty_params.at[relic_number].set(solved_certainty_params)),
+                        lambda: (solved_energy_points_grid_mask, max_solved_certainty_params)
+
+                    )
+                                    
+                    
+                    return (stored_unit_masks_around_relics_updated, stored_rewards_updated, solved_energy_points_grid_mask_updated, max_solved_certainty_params_updated)
+
+                stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, max_solved_certainty_params = jax.lax.cond(
                     valid_to_store,
                     solver,
-                    lambda: (stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, known_energy_points_grid_mask)
+                    lambda: (stored_unit_masks_around_relics, stored_rewards, solved_energy_points_grid_mask, max_solved_certainty_params)
                 )
 
                 # This accumulated in the for loop since later relics can have unsolved spots that overlap with previously relics.  
                 # True where we are certain of the value, false otherwise
                 # If a later relic gets spawned, it never removes a previous relic
-                accumulated_solved_energy_points_grid_mask_on_known_spots = accumulated_solved_energy_points_grid_mask & accumulated_known_energy_points_grid_mask
-                accumulated_solved_energy_points_grid_mask = accumulated_solved_energy_points_grid_mask_on_known_spots | (accumulated_solved_energy_points_grid_mask & (solved_energy_points_grid_mask[relic_number] | inverse_mask_around_relic_symmetrical.astype(jnp.bool)))
-                accumulated_known_energy_points_grid_mask = (accumulated_known_energy_points_grid_mask) + (known_energy_points_grid_mask[relic_number] & solved_energy_points_grid_mask[relic_number])
+                accumulated_solved_energy_points_grid_mask = accumulated_solved_energy_points_grid_mask | solved_energy_points_grid_mask[relic_number]
                 
-            accumulated_known_energy_points_grid_mask = jnp.clip(accumulated_known_energy_points_grid_mask, max=1) # in case energy points were double counted
-
 
         # TODO: account for units getting killed, check energy?
 
@@ -828,8 +819,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             stopping_point = jnp.ceil(float(self.total_updates) * full_strength)
             return jnp.minimum(update_count, stopping_point) / stopping_point.astype(jnp.float32)
 
-        annealed_solved_energy_points_grid_mask = (1 - accumulated_solved_energy_points_grid_mask).astype(jnp.float32) * anneal(0.2)
-        annealed_known_energy_points_grid_mask = accumulated_known_energy_points_grid_mask.astype(jnp.float32) * anneal(0.2)
+        annealed_solved_energy_points_grid_mask = (accumulated_solved_energy_points_grid_mask).astype(jnp.float32)# * anneal(0.2)
 
         # add sensor last visit?
         new_observation = WrappedEnvObs(
@@ -855,7 +845,6 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             action_mask=action_mask,
             param_list=param_list,
             solved_energy_points_grid_mask=annealed_solved_energy_points_grid_mask,
-            known_energy_points_grid_mask=annealed_known_energy_points_grid_mask,
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
@@ -876,7 +865,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      stored_unit_masks_around_relics=stored_unit_masks_around_relics,
                                      stored_rewards=stored_rewards,
                                      solved_energy_points_grid_mask=solved_energy_points_grid_mask,
-                                     known_energy_points_grid_mask=known_energy_points_grid_mask,                               
+                                     max_solved_certainty_params=max_solved_certainty_params,
                                     )
         
         reward_info = RewardInfo(unit_counts=unit_counts, accumulated_solved_energy_points_grid_mask=accumulated_solved_energy_points_grid_mask)

@@ -52,7 +52,7 @@ def extract_32bit_from_grid_mask(grid, pos, subsection_size=5):
 
   # Extract the subsection using lax.dynamic_slice
   subsection = jax.lax.dynamic_slice(padded_grid, (start_row, start_col), (subsection_size, subsection_size))
-  return mask_to_32_bit_integer(subsection.reshape((-1,)))
+  return subsection.reshape((-1,))
     
 
 def reconstruct_grid_from_subsection_bit_mask(subsection, pos, grid_size, subsection_size=5):

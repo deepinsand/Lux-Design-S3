@@ -106,7 +106,6 @@ class EmbeddingEncoder(nn.Module):
                 obs.value_of_sapping_grid[..., jnp.newaxis],
                 obs.relic_map[..., jnp.newaxis],
                 obs.solved_energy_points_grid_mask[..., jnp.newaxis],
-                obs.known_energy_points_grid_mask[..., jnp.newaxis],
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
@@ -270,7 +269,7 @@ def make_train(config, writer, transfer_learning_model):
     
     fixed_env_params = EnvParams()
     env = LuxAIS3Env(auto_reset=False, fixed_env_params=fixed_env_params)
-    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"], use_solver=config["TRANSFER_LEARNING"])
+    env = LuxaiS3GymnaxWrapper(env, config["NUM_UPDATES"], use_solver=config["USE_SOLVER"])
     env = LogWrapper(env)  # Log rewards before normalizing 
     env = NormalizeVecReward(env, config["GAMMA"])
 

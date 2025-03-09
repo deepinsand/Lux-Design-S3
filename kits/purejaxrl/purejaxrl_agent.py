@@ -72,7 +72,7 @@ class Agent():
         return (action, new_obs, env_state)
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
-        should_use_solver = config["TRANSFER_LEARNING"] and remainingOverageTime > 10
+        should_use_solver = config["USE_SOLVER"] and remainingOverageTime > 10
 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
         t0 = time.time()
