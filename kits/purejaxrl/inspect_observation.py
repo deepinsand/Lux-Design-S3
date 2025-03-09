@@ -31,7 +31,7 @@ if __name__ == "__main__":
     all_action = file["actions"]
     params = file["params"]
 
-    for step in range(95, 505):
+    for step in range(171, 505):
         original_obs = all_original_obs[step]
         state = all_state[step]
         prev_state = all_state[step - 1]
