@@ -84,6 +84,9 @@ class EmbeddingEncoder(nn.Module):
         param_list_reshaped =  jnp.reshape(param_list_reshaped, (param_list_reshaped.shape[0],) + (1,1) + (param_list_reshaped.shape[1],)) # (Env, 11) -> # (Env, 1,1,11)
         param_list_reshaped = jnp.tile(param_list_reshaped, reps=(1,) + map_shape + (1,))  # (Env, w,h,11)
 
+        empty_obs = jnp.zeros_like(obs.solved_energy_points_grid_mask)
+        
+
         # no relic map
         # maybe add symmetric sensor?
         # sensor_last_visited has no mask?
@@ -106,6 +109,7 @@ class EmbeddingEncoder(nn.Module):
                 obs.value_of_sapping_grid[..., jnp.newaxis],
                 obs.relic_map[..., jnp.newaxis],
                 obs.solved_energy_points_grid_mask[..., jnp.newaxis],
+                empty_obs[..., jnp.newaxis],
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels
@@ -302,14 +306,14 @@ def make_train(config, writer, transfer_learning_model):
             )
 
         if config["TRANSFER_LEARNING"]:
-            transfer_learning_model["params"]["Dense_2"] = network_params["params"]["Dense_2"] # init transfer model with Dense 2 inits
+            #transfer_learning_model["params"]["Dense_2"] = network_params["params"]["Dense_2"] # init transfer model with Dense 2 inits
             network_params = flax.serialization.from_state_dict(network_params, {"params": transfer_learning_model['params']})
             
-            partition_optimizers = {'trainable': tx, 'frozen': optax.set_to_zero()}
-            param_partitions = flax.traverse_util.path_aware_map(
-                lambda path, v: 'trainable' if 'Dense_2' in path else 'frozen', network_params)
+            # partition_optimizers = {'trainable': tx, 'frozen': optax.set_to_zero()}
+            # param_partitions = flax.traverse_util.path_aware_map(
+            #     lambda path, v: 'trainable' if 'Dense_2' in path else 'frozen', network_params)
             
-            tx = optax.multi_transform(partition_optimizers, param_partitions)
+            # tx = optax.multi_transform(partition_optimizers, param_partitions)
 
         
         train_state = TrainState.create(

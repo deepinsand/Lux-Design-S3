@@ -38,7 +38,7 @@ if __name__ == "__main__":
 
 
 
-    log_dir = "logs"
+    log_dir = "logs2"
 
     # Generate a unique subdirectory name using timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")

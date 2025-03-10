@@ -705,8 +705,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                 units_not_around_relic = inverse_mask_around_relic * grid_unit_mask
                 # TODO: if a unit is definitely on an ep, we can still solve and subtract
 
-                probabilty_units_not_around_relic_are_on_ep = grid_probability_of_being_energy_point_based_on_relic_positions * units_not_around_relic # TODO: check other solved states!
-                valid_to_store = discovered_relic_nodes_mask[relic_number] & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) & (~match_over)
+                #probabilty_units_not_around_relic_are_on_ep = grid_probability_of_being_energy_point_based_on_relic_positions * units_not_around_relic # TODO: check other solved states!
+                valid_to_store = discovered_relic_nodes_mask[relic_number] & (~match_over)# & (probabilty_units_not_around_relic_are_on_ep.sum() < 0.01) 
                 valid_to_store = valid_to_store.astype(jnp.int32)
 
                 positions_as_32_bit = extract_32bit_from_grid_mask(grid_unit_count_for_rewards_calculation_symmetrical, discovered_relic_node_positions[relic_number])
@@ -819,7 +819,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             stopping_point = jnp.ceil(float(self.total_updates) * full_strength)
             return jnp.minimum(update_count, stopping_point) / stopping_point.astype(jnp.float32)
 
-        annealed_solved_energy_points_grid_mask = (accumulated_solved_energy_points_grid_mask).astype(jnp.float32)# * anneal(0.2)
+        annealed_solved_energy_points_grid_mask = (accumulated_solved_energy_points_grid_mask).astype(jnp.float32) * anneal(0.05)
 
         # add sensor last visit?
         new_observation = WrappedEnvObs(

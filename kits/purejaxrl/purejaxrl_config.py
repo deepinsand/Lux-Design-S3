@@ -1,10 +1,10 @@
 
 config = {
     "LR": 2.5e-4,
-    "NUM_ENVS": 32,
+    "NUM_ENVS": 16,
     "NUM_STEPS": 101, # MUST STAY 101!!!
     "TOTAL_TIMESTEPS": 2_000_000,
-    "UPDATE_EPOCHS": 8,
+    "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 4, # must be less than num_envs since RNN shuffles environemnts
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
@@ -17,8 +17,8 @@ config = {
     "DEBUG": True,
     "PROFILE": False,
     "CONVOLUTIONS": True,
-    "USE_SOLVER": False,
-    "TRANSFER_LEARNING": False,
+    "USE_SOLVER": True,
+    "TRANSFER_LEARNING": True,
     "TRANSFER_LEARNING_BASE_MODEL": "models/model_20250309-142808.pkl"
 
 }
