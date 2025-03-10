@@ -20,7 +20,7 @@ from purejaxrl_ppo import ActorCritic
 def load_model_for_inference(rng, network_cls, env, env_params):
 
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_file_dir, "models/latest_model.pkl")
+    model_path = os.path.join(current_file_dir, "models/model_20250309-225632.pkl")
 
     with open(model_path, 'rb') as f: # Binary read mode for pickle
         loaded_params = pickle.load(f) # Load parameters directly using pickle.load
