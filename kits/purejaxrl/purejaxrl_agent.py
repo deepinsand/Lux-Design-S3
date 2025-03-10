@@ -75,7 +75,7 @@ class Agent():
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
         should_use_solver = config["USE_SOLVER"] and remainingOverageTime > 10
         if (self.has_not_turned_off_solver and not should_use_solver):
-            print("Turning off solver at step " + step)
+            print(f"Turning off solver at step {step}")
             self.has_not_turned_off_solver = False
 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)

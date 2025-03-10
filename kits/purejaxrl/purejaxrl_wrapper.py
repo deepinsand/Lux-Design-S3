@@ -141,6 +141,8 @@ class StatefulEnvState:
 @struct.dataclass
 class RewardInfo:
     unit_counts: chex.Array
+    opp_units_killed: int
+    units_killed: int
     accumulated_solved_energy_points_grid_mask: chex.Array
 
 
@@ -541,6 +543,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         unit_mask_opp = jnp.array(obs.units_mask[opp_team_id]) # shape (max_units, )
         unit_energys_opp = jnp.array(obs.units.energy[opp_team_id]) # shape (max_units, 1)
         unit_mask_opp = unit_mask_opp & (unit_energys_opp >= 0)
+        opp_units_killed = (unit_mask_opp & (unit_energys_opp < 0)).sum()
+        units_killed = (unit_mask & (unit_energys < 0)).sum()
 
         unit_positions_opp = jnp.array(obs.units.position[opp_team_id]) # shape (max_units, 2)        
         unit_counts_opp = self.compute_counts_map(unit_positions_opp, unit_mask_opp)
@@ -920,7 +924,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
                                     )
         
-        reward_info = RewardInfo(unit_counts=unit_counts, accumulated_solved_energy_points_grid_mask=accumulated_solved_energy_points_grid_mask)
+        reward_info = RewardInfo(unit_counts=unit_counts, accumulated_solved_energy_points_grid_mask=accumulated_solved_energy_points_grid_mask, units_killed=units_killed, opp_units_killed=opp_units_killed)
         
         return new_observation, new_state, reward_info
     
@@ -1001,8 +1005,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         diff_points = new_team_points - old_team_points
         diff_wins = new_team_wins - old_team_wins
 
-        diff_dot_product = jnp.full(2, -1, dtype=jnp.int16)
-        diff_dot_product = diff_dot_product.at[team_id].set(1)
+        diff_dot_product = jnp.full(2, -1, dtype=jnp.float32)
+        diff_dot_product = diff_dot_product.at[team_id].set(1.)
 
         episode_over = new_team_wins.sum() == 5
         has_won = new_state.team_wins[team_id] > new_state.team_wins[opp_team_id]
@@ -1010,12 +1014,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         # On steps mod 101, the points are wiped out but the wins change.
         diff_points_summed = jax.lax.cond(
             jnp.any(diff_wins),
-            lambda: 0,
+            lambda: 0.,
             lambda: jnp.dot(diff_points, diff_dot_product)
         )
         diff_wins_summed = jax.lax.cond(
             episode_over,
-            lambda: 0,
+            lambda: 0.,
             lambda: jnp.dot(diff_wins, diff_dot_product)
         )
 
@@ -1034,15 +1038,12 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
         
         match_win_summed = match_win_summed * 20
-        diff_wins_summed = diff_wins_summed * 0 #* (progress_shape_rate(0.8))
-        diff_points_summed = diff_points_summed * 1# * (progress_shape_rate(0.9))
+        diff_wins_summed = diff_wins_summed * 20
+        diff_points_summed = diff_points_summed * 1 * (progress_shape_rate(0.4))
         number_relics_summed = number_relics_discovered * 10 * (progress_shape_rate(1))
         
-        new_spaces_visited_summed = new_spaces_visited * 0.4 * (progress_shape_rate(0.5))
-        occupied_same_space_summed = occupied_same_space * -0.4 * (progress_shape_rate(0.5))
-        number_times_visited_unknown_spot_summed = number_times_visited_unknown_spot * (progress_shape_rate(0.7))
-        
-        reward = diff_points_summed + diff_wins_summed# + diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed + number_relics_summed + number_times_visited_unknown_spot_summed
+        diff_units_killed_summed = (reward_info.opp_units_killed - reward_info.units_killed) * 5 * (progress_shape_rate(0.2))
+        reward = diff_points_summed + diff_wins_summed + diff_units_killed_summed# + diff_points_summed + new_spaces_visited_summed + occupied_same_space_summed + number_relics_summed + number_times_visited_unknown_spot_summed
 
 
         return reward
