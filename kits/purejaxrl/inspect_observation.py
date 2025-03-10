@@ -31,7 +31,7 @@ if __name__ == "__main__":
     all_action = file["actions"]
     params = file["params"]
 
-    for step in range(38, 505):
+    for step in range(477, 505):
         original_obs = all_original_obs[step]
         state = all_state[step]
         prev_state = all_state[step - 1]
@@ -39,11 +39,15 @@ if __name__ == "__main__":
         action = all_action[step]
 
         total_solved_spots = new_obs.solved_energy_points_grid_mask.sum() # SHOULD BE CALLED UNKNOWN SPOTS!!!
+        total_known_spots = new_obs.known_energy_points_grid_mask.sum() # SHOULD BE CALLED UNKNOWN SPOTS!!!
+
         state_solved_spots = state.solved_energy_points_grid_mask.sum()
 
         #seven_two = state.known_energy_points_grid_mask[1][3, 14]
         # new_obs.solved_energy_points_grid_mask.astype(jnp.int16).T
+        # new_obs.known_energy_points_grid_mask.astype(jnp.int16).T
+
         # state.solved_energy_points_grid_mask[0].astype(jnp.int16).T
-        jax.debug.print("step: {}, total_solved_spots: {}, state_solved_spots: {}, ", step, total_solved_spots, state_solved_spots)
+        jax.debug.print("step: {}, total_solved_spots: {}, total_known_spots: {}, state_solved_spots: {}, ", step, total_solved_spots, total_known_spots, state_solved_spots)
 
         #next_obs, next_env_state, _ = env.transform_obs(original_obs, prev_state, params, 0, 1, update_count=1, use_solver=config["USE_SOLVER"])

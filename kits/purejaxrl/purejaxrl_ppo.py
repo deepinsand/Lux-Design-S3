@@ -84,7 +84,6 @@ class EmbeddingEncoder(nn.Module):
         param_list_reshaped =  jnp.reshape(param_list_reshaped, (param_list_reshaped.shape[0],) + (1,1) + (param_list_reshaped.shape[1],)) # (Env, 11) -> # (Env, 1,1,11)
         param_list_reshaped = jnp.tile(param_list_reshaped, reps=(1,) + map_shape + (1,))  # (Env, w,h,11)
 
-        empty_obs = jnp.zeros_like(obs.solved_energy_points_grid_mask)
         
 
         # no relic map
@@ -109,7 +108,7 @@ class EmbeddingEncoder(nn.Module):
                 obs.value_of_sapping_grid[..., jnp.newaxis],
                 obs.relic_map[..., jnp.newaxis],
                 obs.solved_energy_points_grid_mask[..., jnp.newaxis],
-                empty_obs[..., jnp.newaxis],
+                obs.known_energy_points_grid_mask[..., jnp.newaxis],
             ],
             axis=-1, # Concatenate along the last axis (channels after wxh)
         ) # grid_embedding shape (w, h, t*(self.dim + 1)+4+1) , made 13 so 28  + 4 = 32 channels

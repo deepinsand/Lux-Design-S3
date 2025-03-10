@@ -83,6 +83,7 @@ class WrappedEnvObs:
     action_mask: chex.Array
     param_list: chex.Array
     solved_energy_points_grid_mask: chex.Array
+    known_energy_points_grid_mask: chex.Array
 
 def init_empty_obs(env_params, num_envs):
     def fill_zeroes(shape, dtype=jnp.int16):
@@ -110,6 +111,7 @@ def init_empty_obs(env_params, num_envs):
         sensor_last_visit_normalized=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         action_mask=fill_zeroes((env_params.max_units, 6), dtype=jnp.bool),
         param_list=fill_zeroes((9,), dtype=jnp.float32),
+        known_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
         solved_energy_points_grid_mask=fill_zeroes((env_params.map_width, env_params.map_height), dtype=jnp.float32),
     )
 @struct.dataclass
@@ -133,6 +135,7 @@ class StatefulEnvState:
     stored_rewards: chex.Array
     solved_energy_points_grid_mask: chex.Array
     max_solved_certainty_params: chex.Array
+    known_energy_points_grid_mask: chex.Array
 
 
 @struct.dataclass
@@ -190,6 +193,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             solved_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.int32),
             stored_unit_masks_around_relics=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, 50, 25), dtype=jnp.int32),
             stored_rewards=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, 50), dtype=jnp.int32),
+            known_energy_points_grid_mask=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2, self.fixed_env_params.map_width, self.fixed_env_params.map_height), dtype=jnp.int32),
             max_solved_certainty_params=jnp.zeros((self.fixed_env_params.max_relic_nodes // 2), dtype=jnp.int32),
         )
         return empty_data
@@ -677,9 +681,11 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
         stored_rewards = state.stored_rewards
         solved_energy_points_grid_mask = state.solved_energy_points_grid_mask
         max_solved_certainty_params = state.max_solved_certainty_params
+        known_energy_points_grid_mask = state.known_energy_points_grid_mask
 
 
         accumulated_solved_energy_points_grid_mask = jnp.full_like(grid_unit_mask, False) # this is False where a spot is unknown.  We not it when we send to obs so we can 0 it out during pretraining
+        accumulated_known_energy_points_grid_mask = jnp.full_like(grid_unit_mask, 0)
 
         if use_solver:
             def create_relic_mask_for(relic_number, dtype):
@@ -690,7 +696,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
             def create_solved_certainty_params_grid_for(relic_number):
                 mask_around_relic_symmetrical = create_relic_mask_for(relic_number, jnp.int32)
-                return mask_around_relic_symmetrical * max_solved_certainty_params[relic_number]
+                return mask_around_relic_symmetrical * max_solved_certainty_params[relic_number] * (1 - known_energy_points_grid_mask[relic_number].astype(jnp.int32))
 
             solved_certainty_params_grid = jnp.max(jnp.array([create_solved_certainty_params_grid_for(0), create_solved_certainty_params_grid_for(1), create_solved_certainty_params_grid_for(2)]), axis=0)
             all_relics_mask = create_relic_mask_for(0, jnp.bool) | create_relic_mask_for(1, jnp.bool) | create_relic_mask_for(2, jnp.bool)
@@ -743,8 +749,9 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
     
                     # count number of items stored
                     number_of_stored_unit_masks = (stored_unit_masks_around_relics[relic_number, :, :].sum(axis=1) > 0).sum()
-                    unique_positions_occupied = (stored_unit_masks_around_relics[relic_number, :, :].sum(axis=0) > 0).sum()
-
+                    unique_positions_occupied_mask = (stored_unit_masks_around_relics[relic_number, :, :].sum(axis=0) > 0)
+                    total_unique_positions_occupied = unique_positions_occupied_mask.sum()
+                    total_possible_positions = mask_around_relic.sum()
                     # a = stored_unit_masks_around_relics_updated[relic_number, :] > 0
                     # jax.device_get(stored_rewards_updated[relic_number, :][a])
 
@@ -757,30 +764,38 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
 
                     # Favor solutions with more relics.  This could cause an issue if a relic is spawned with no eps, but whatever
                     #number_of_ep = jnp.solution.sum()
+                    
 
-                    solved_certainty_params = number_of_stored_unit_masks * unique_positions_occupied * valid_to_store * solution.sum() * valid_solution
+                    solved_certainty_params = jax.lax.cond(total_unique_positions_occupied == total_possible_positions, 
+                                                           lambda: 50 * 25 * 25,
+                                                           lambda: number_of_stored_unit_masks * total_unique_positions_occupied  * solution.sum()) * valid_solution * valid_to_store
 
                     solved_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(solution, discovered_relic_node_positions[relic_number], 
                                                                                             self.fixed_env_params.map_width)
                                         
                     solved_energy_points_grid_mask_for_this_relic_symmetrical = jnp.logical_or(solved_energy_points_grid_mask_for_this_relic , solved_energy_points_grid_mask_for_this_relic[::-1, ::-1].T)
+                    known_energy_points_grid_mask_for_this_relic = reconstruct_grid_from_subsection_bit_mask(unique_positions_occupied_mask, discovered_relic_node_positions[relic_number], 
+                                                                                            self.fixed_env_params.map_width)
                     
+                    # spots that havne't been visited!!!
+                    known_energy_points_grid_mask_for_this_relic_symmetrical =  (~jnp.logical_or(known_energy_points_grid_mask_for_this_relic , known_energy_points_grid_mask_for_this_relic[::-1, ::-1].T)) & mask_around_relic_symmetrical
                     
-                    solved_energy_points_grid_mask_updated, max_solved_certainty_params_updated = jax.lax.cond(
+                    solved_energy_points_grid_mask_updated, max_solved_certainty_params_updated, known_energy_points_grid_mask_updated  = jax.lax.cond(
                         solved_certainty_params > max_solved_certainty_params[relic_number],
                         lambda: (solved_energy_points_grid_mask.at[relic_number, :, :].set(solved_energy_points_grid_mask_for_this_relic_symmetrical), 
-                                 max_solved_certainty_params.at[relic_number].set(solved_certainty_params)),
-                        lambda: (solved_energy_points_grid_mask, max_solved_certainty_params)
+                                 max_solved_certainty_params.at[relic_number].set(solved_certainty_params),
+                                 known_energy_points_grid_mask.at[relic_number, :, :].set(known_energy_points_grid_mask_for_this_relic_symmetrical)),
+                        lambda: (solved_energy_points_grid_mask, max_solved_certainty_params, known_energy_points_grid_mask)
 
                     )
                                     
                     
-                    return (solved_energy_points_grid_mask_updated, max_solved_certainty_params_updated)
+                    return (solved_energy_points_grid_mask_updated, max_solved_certainty_params_updated, known_energy_points_grid_mask_updated)
 
-                solved_energy_points_grid_mask, max_solved_certainty_params = jax.lax.cond(
+                solved_energy_points_grid_mask, max_solved_certainty_params, known_energy_points_grid_mask = jax.lax.cond(
                     valid_to_store,
                     solver,
-                    lambda: (solved_energy_points_grid_mask, max_solved_certainty_params)
+                    lambda: (solved_energy_points_grid_mask, max_solved_certainty_params, known_energy_points_grid_mask)
                 )
 
 
@@ -788,7 +803,13 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                 # True where we are certain of the value, false otherwise
                 # If a later relic gets spawned, it never removes a previous relic
                 accumulated_solved_energy_points_grid_mask = accumulated_solved_energy_points_grid_mask | solved_energy_points_grid_mask[relic_number]
-                
+               
+                # this accumulates the spots that haven't been visited.  
+                # If a spot has been visited on a previous relic, and it hasn't in a later, that shoudl be falst
+                # if a spot hasnt been visited on a preivous relic, and it has laster, then that relic could be coutned in prev iteration
+                accumulated_known_energy_points_grid_mask = accumulated_known_energy_points_grid_mask | known_energy_points_grid_mask[relic_number]
+               
+
 
         # TODO: account for units getting killed, check energy?
 
@@ -846,6 +867,7 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             return jnp.minimum(update_count, stopping_point) / stopping_point.astype(jnp.float32)
 
         annealed_solved_energy_points_grid_mask = (accumulated_solved_energy_points_grid_mask).astype(jnp.float32) * anneal(0.05)
+        annealed_known_energy_points_grid_mask = accumulated_known_energy_points_grid_mask.astype(jnp.float32) * anneal(0.2)
 
         # add sensor last visit?
         new_observation = WrappedEnvObs(
@@ -871,6 +893,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
             action_mask=action_mask,
             param_list=param_list,
             solved_energy_points_grid_mask=annealed_solved_energy_points_grid_mask,
+            known_energy_points_grid_mask=annealed_known_energy_points_grid_mask,                               
+
         )
         
         new_state = StatefulEnvState(discovered_relic_node_positions=discovered_relic_node_positions,
@@ -892,6 +916,8 @@ class LuxaiS3GymnaxWrapper(GymnaxWrapper):
                                      stored_rewards=stored_rewards,
                                      solved_energy_points_grid_mask=solved_energy_points_grid_mask,
                                      max_solved_certainty_params=max_solved_certainty_params,
+                                     known_energy_points_grid_mask=known_energy_points_grid_mask,                               
+
                                     )
         
         reward_info = RewardInfo(unit_counts=unit_counts, accumulated_solved_energy_points_grid_mask=accumulated_solved_energy_points_grid_mask)

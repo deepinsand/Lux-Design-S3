@@ -20,7 +20,7 @@ from purejaxrl_ppo import ActorCritic
 def load_model_for_inference(rng, network_cls, env, env_params):
 
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_file_dir, "models/model_20250309-225632.pkl")
+    model_path = os.path.join(current_file_dir, "models/latest_model.pkl")
 
     with open(model_path, 'rb') as f: # Binary read mode for pickle
         loaded_params = pickle.load(f) # Load parameters directly using pickle.load
@@ -58,6 +58,7 @@ class Agent():
         self.model, self.model_params= load_model_for_inference(rng_reset, ActorCritic, self.env, self.env_cfg) # Or path to your saved .npz file
    
         self.env_state = self.env.empty_stateful_env_state()
+        self.has_not_turned_off_solver = True
 
     @partial(jax.jit, static_argnums=(0,4))
     def get_action(self, env_state, env_obs, rng_act, should_use_solver):
@@ -73,6 +74,9 @@ class Agent():
 
     def act(self, step: int, obs, remainingOverageTime: int = 60): 
         should_use_solver = config["USE_SOLVER"] and remainingOverageTime > 10
+        if (self.has_not_turned_off_solver and not should_use_solver):
+            print("Turning off solver at step " + step)
+            self.has_not_turned_off_solver = False
 
         actions = np.zeros((self.env_cfg.max_units, 3), dtype=int)
         t0 = time.time()
